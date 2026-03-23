@@ -1,0 +1,206 @@
+# 局域网多人 Excel 编辑器 - 离线部署指南
+
+## 📦 目录结构
+
+```
+lan_excel_editor/
+├── start.bat              # Windows 启动脚本（双击运行）
+├── download_packages.ps1  # 依赖包下载脚本（有网环境运行）
+├── requirements.txt       # Python 依赖清单
+├── app.py                 # 主程序
+├── config.py              # 配置文件
+├── README.md              # 功能说明
+├── DEPLOY.md              # 本文件
+├── static/                # 前端资源（已本地化）
+│   ├── css/
+│   │   └── handsontable.full.min.css
+│   └── js/
+│       ├── handsontable.full.min.js
+│       └── socket.io.min.js
+├── templates/             # HTML 模板
+├── handlers/              # 请求处理器
+├── services/              # 业务逻辑
+├── models/                # 数据模型
+├── tasks/                 # 后台任务
+├── data/                  # 数据目录（自动创建）
+│   ├── files/             # Excel 文件存储
+│   ├── meta/              # 元数据
+│   ├── snapshots/         # 版本快照
+│   └── styles/            # 样式文件
+└── packages/              # 离线依赖包（需下载）
+```
+
+## 🚀 快速开始（离线环境）
+
+### 方法一：完整离线包（推荐）
+
+#### 第 1 步：在有网络的环境中准备
+
+1. 将项目复制到联网电脑
+2. 打开 PowerShell，进入项目目录
+3. 运行依赖下载脚本：
+   ```powershell
+   .\download_packages.ps1
+   ```
+4. 等待下载完成，会创建 `packages/` 目录
+
+#### 第 2 步：打包分发
+
+将整个项目目录（包括 `packages/`）复制到 U 盘或共享文件夹：
+
+```
+lan_excel_editor/          <-- 复制整个文件夹
+├── packages/              <-- 包含所有 .whl 文件
+├── static/
+├── templates/
+├── start.bat
+├── requirements.txt
+└── ...
+```
+
+#### 第 3 步：在离线服务器上部署
+
+1. **安装 Python**（如果还没有）：
+   - 下载 Python 3.9+ 安装包：https://www.python.org/downloads/
+   - 安装时勾选 **"Add Python to PATH"**
+
+2. **运行程序**：
+   - 双击 `start.bat`
+   - 首次运行会自动创建虚拟环境并安装依赖
+   - 看到 "服务启动中..." 表示成功
+
+3. **访问应用**：
+   - 本机：http://localhost:5000
+   - 局域网其他设备：http://[服务器IP]:5000
+   - 查看服务器 IP：在 cmd 中运行 `ipconfig`
+
+### 方法二：使用 pip 缓存（简化版）
+
+如果目标机器可以临时联网，直接运行：
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 启动服务
+python app.py
+```
+
+## 🔧 详细配置
+
+### 修改端口号
+
+编辑 `app.py`，找到最后一行：
+
+```python
+socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+```
+
+将 `5000` 改为其他端口（如 `8080`）：
+
+```python
+socketio.run(app, host='0.0.0.0', port=8080, debug=False)
+```
+
+### 修改数据存储路径
+
+编辑 `config.py`：
+
+```python
+# 数据目录（默认在项目目录下）
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data', 'files')
+
+# 可以改为其他路径，如：
+# DATA_DIR = 'D:\\ExcelFiles'
+```
+
+### 防火墙设置
+
+确保服务器防火墙允许访问端口 5000：
+
+```powershell
+# 以管理员身份运行 PowerShell
+New-NetFirewallRule -DisplayName "Excel Editor" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow
+```
+
+## 📋 系统要求
+
+| 组件 | 最低要求 |
+|------|----------|
+| 操作系统 | Windows 10/11 / Windows Server 2016+ |
+| Python | 3.9 或更高版本 |
+| 内存 | 2 GB RAM |
+| 磁盘空间 | 500 MB（含依赖） |
+| 网络 | 局域网内互通 |
+
+## 🐛 常见问题
+
+### 问题 1：提示 "未检测到 Python"
+
+**解决**：
+1. 访问 https://www.python.org/downloads/
+2. 下载 Python 3.9+ 安装程序
+3. 安装时勾选 **"Add Python to PATH"**
+4. 重新打开命令行或重启电脑
+
+### 问题 2：端口被占用
+
+**解决**：
+```bash
+# 查看占用 5000 端口的进程
+netstat -ano | findstr :5000
+
+# 修改 app.py 使用其他端口（如 8080）
+```
+
+### 问题 3：局域网其他设备无法访问
+
+**解决**：
+1. 检查防火墙设置，允许端口 5000
+2. 确认服务器 IP 正确：`ipconfig` 查看 IPv4 地址
+3. 确保客户端和服务器在同一网段
+4. 尝试关闭 Windows Defender 防火墙（仅测试时）
+
+### 问题 4：依赖安装失败
+
+**解决**：
+1. 确保 `packages/` 目录存在且包含 .whl 文件
+2. 运行 `download_packages.ps1` 重新下载
+3. 或临时连接网络运行 `pip install -r requirements.txt`
+
+## 📁 数据备份
+
+重要数据存储在以下位置：
+
+- **Excel 文件**: `data/files/`
+- **元数据**: `data/meta/`
+- **版本快照**: `data/snapshots/`
+- **样式文件**: `data/styles/`
+
+建议定期备份整个 `data/` 目录。
+
+## 🔄 更新程序
+
+1. 保留 `data/` 目录（包含所有文件和数据）
+2. 替换其他文件为新版本
+3. 重新运行 `start.bat`
+
+## 📝 日志查看
+
+程序运行日志显示在命令行窗口中。
+
+如需保存日志，修改 `start.bat`：
+```batch
+python app.py >> app.log 2>&1
+```
+
+## 🤝 技术支持
+
+如有问题，请检查：
+1. README.md - 功能说明
+2. 浏览器开发者工具（F12）- 前端错误
+3. 命令行输出 - 后端错误
+
+---
+
+**部署完成后，局域网内所有设备都可以通过浏览器访问和使用！**

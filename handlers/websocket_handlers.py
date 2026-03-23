@@ -10,6 +10,7 @@ from utils import safe_join, rel_path
 from models.session import get_or_create_session, file_sessions, user_current_file, cleanup_empty_sessions
 from services.snapshot_service import create_snapshot
 from services.meta_service import get_file_meta
+from services.style_service import save_styles, delete_styles
 
 
 def register_websocket_handlers(socketio):
@@ -80,6 +81,7 @@ def register_websocket_handlers(socketio):
             'path': rel,
             'filename': os.path.basename(filepath),
             'sheets': sess.spreadsheet_data,
+            'cell_styles': sess.cell_styles,
             'readonly': sess.readonly,
             'users': sess.get_user_list(),
             'my_color': user_color,
@@ -238,3 +240,55 @@ def register_websocket_handlers(socketio):
             emit('file_saved', {'by': sess.online_users.get(sid, {}).get('username', '未知')}, room=rel, broadcast=True, include_self=False)
         else:
             emit('save_result', {'ok': True, 'saved': False, 'message': '内容无变更'})
+    
+    @socketio.on('cell_style_change')
+    def handle_cell_style_change(data):
+        """处理单元格样式变更"""
+        sid = request.sid
+        
+        # 检查用户是否在编辑文件
+        if sid not in user_current_file:
+            return
+        
+        rel = user_current_file[sid]
+        if rel not in file_sessions:
+            return
+        
+        sess = file_sessions[rel]
+        
+        # 只读检查
+        if sess.readonly:
+            emit('error', {'message': '文件为只读，无法修改样式'})
+            return
+        
+        sheet = data.get('sheet', 'Sheet1')
+        row = int(data.get('row', 0))
+        col = int(data.get('col', 0))
+        style_type = data.get('style_type', '')
+        value = data.get('value')
+        
+        user_info = sess.online_users.get(sid)
+        username = user_info['username'] if user_info else '未知'
+        
+        # 更新样式数据
+        if sheet not in sess.cell_styles:
+            sess.cell_styles[sheet] = {}
+        if str(row) not in sess.cell_styles[sheet]:
+            sess.cell_styles[sheet][str(row)] = {}
+        if str(col) not in sess.cell_styles[sheet][str(row)]:
+            sess.cell_styles[sheet][str(row)][str(col)] = {}
+        
+        sess.cell_styles[sheet][str(row)][str(col)][style_type] = value
+        
+        # 保存到磁盘
+        save_styles(sess.filepath, sess.cell_styles)
+        
+        # 广播给同一文件的其他用户
+        emit('cell_style_updated', {
+            'sheet': sheet,
+            'row': row,
+            'col': col,
+            'style_type': style_type,
+            'value': value,
+            'username': username
+        }, room=rel, broadcast=True, include_self=False)

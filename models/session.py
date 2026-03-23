@@ -11,6 +11,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from config import DATA_DIR, SNAP_DIR, USER_COLORS, MAX_SNAPSHOTS
 from utils import rel_path, calc_data_hash, get_default_data
+from services.style_service import load_styles
 
 
 class FileSession:
@@ -20,6 +21,7 @@ class FileSession:
         self.filepath = filepath                    # 文件绝对路径
         self.rel_path = rel_path(filepath)          # 相对路径（作为 room name）
         self.spreadsheet_data: Dict[str, List[List[str]]] = {}
+        self.cell_styles: Dict[str, Any] = {}       # 单元格样式
         self.last_saved_hash: str = ''              # 上次保存的数据指纹
         # 用户信息：{sid: {'username': str, 'color': str, 'selection': {sheet, row, col}}}
         self.online_users: Dict[str, Dict[str, Any]] = {}
@@ -57,6 +59,9 @@ class FileSession:
         from services.meta_service import get_file_meta
         m = get_file_meta(self.rel_path)
         self.readonly = m.get('readonly', False)
+        
+        # 加载样式
+        self.cell_styles = load_styles(self.filepath)
     
     def save(self) -> bool:
         """保存到磁盘，如有变更则返回 True"""

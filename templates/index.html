@@ -192,6 +192,11 @@
   <div class="style-group">
     <button class="style-btn" onclick="clearCellStyle()" title="清除格式" style="width:auto;padding:0 8px;" onmousedown="event.preventDefault()">✕ 清除</button>
   </div>
+  <div class="style-group">
+    <button class="style-btn" title="查找替换 (Ctrl+F)" onclick="openFindReplace()" onmousedown="event.preventDefault()">🔍 查找</button>
+    <button class="style-btn" title="撤销 (Ctrl+Z)" onclick="undo()" onmousedown="event.preventDefault()">↶ 撤销</button>
+    <button class="style-btn" title="重做 (Ctrl+Y)" onclick="redo()" onmousedown="event.preventDefault()">↷ 重做</button>
+  </div>
 </div>
 
 <!-- 状态栏 -->
@@ -297,6 +302,30 @@
     <div class="snap-list" id="snap-list"></div>
     <div class="modal-btns">
       <button class="btn gray" onclick="closeModal('modal-versions')">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 查找替换模态框 -->
+<div class="modal-overlay" id="modal-find-replace">
+  <div class="modal">
+    <h2>查找和替换</h2>
+    <input type="text" id="find-text" placeholder="查找内容">
+    <input type="text" id="replace-text" placeholder="替换为（可选）">
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:#666;">
+        <input type="checkbox" id="find-case-sensitive"> 区分大小写
+      </label>
+      <label style="font-size:12px;color:#666;margin-left:15px;">
+        <input type="checkbox" id="find-whole-cell"> 整单元格匹配
+      </label>
+    </div>
+    <div id="find-results" style="font-size:12px;color:#666;margin-bottom:10px;"></div>
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeModal('modal-find-replace')">关闭</button>
+      <button class="btn" onclick="findNext()">查找下一个</button>
+      <button class="btn orange" onclick="replaceCurrent()" id="btn-replace-current" disabled>替换</button>
+      <button class="btn green" onclick="replaceAll()" id="btn-replace-all" disabled>全部替换</button>
     </div>
   </div>
 </div>
@@ -429,6 +458,15 @@ function applyStyle(styleType, value) {
     } else {
       cellStyles[currentSheet][row][col][styleType] = value;
     }
+    
+    // 发送样式变更到服务器
+    socket.emit('cell_style_change', {
+      sheet: currentSheet,
+      row: row,
+      col: col,
+      style_type: styleType,
+      value: value
+    });
   });
   
   // 更新颜色指示器
@@ -481,6 +519,196 @@ function updateStyleToolbar(row, col) {
   document.getElementById('bg-indicator').style.background = style.bgColor || 'transparent';
 }
 
+// ==================== 撤销/重做功能 ====================
+function undo() {
+  if (currentReadonly || !hot) return;
+  
+  const undone = hot.undo();
+  if (undone) {
+    setSaveStatus('已撤销');
+  }
+}
+
+function redo() {
+  if (currentReadonly || !hot) return;
+  
+  const redone = hot.redo();
+  if (redone) {
+    setSaveStatus('已重做');
+  }
+}
+
+// ==================== 查找替换功能 ====================
+var findReplaceState = {
+  currentMatch: null,
+  matches: [],
+  currentIndex: -1
+};
+
+function openFindReplace() {
+  if (!hot) return;
+  document.getElementById('find-text').value = '';
+  document.getElementById('replace-text').value = '';
+  document.getElementById('find-results').textContent = '';
+  document.getElementById('btn-replace-current').disabled = true;
+  document.getElementById('btn-replace-all').disabled = true;
+  findReplaceState = { currentMatch: null, matches: [], currentIndex: -1 };
+  openModal('modal-find-replace');
+  document.getElementById('find-text').focus();
+}
+
+function findAll() {
+  if (!hot) return [];
+  
+  const findText = document.getElementById('find-text').value;
+  if (!findText) return [];
+  
+  const caseSensitive = document.getElementById('find-case-sensitive').checked;
+  const wholeCell = document.getElementById('find-whole-cell').checked;
+  
+  const matches = [];
+  const data = hot.getData();
+  
+  for (let r = 0; r < data.length; r++) {
+    for (let c = 0; c < data[r].length; c++) {
+      let cellValue = String(data[r][c] || '');
+      let searchText = findText;
+      
+      if (!caseSensitive) {
+        cellValue = cellValue.toLowerCase();
+        searchText = searchText.toLowerCase();
+      }
+      
+      let isMatch = false;
+      if (wholeCell) {
+        isMatch = cellValue === searchText;
+      } else {
+        isMatch = cellValue.includes(searchText);
+      }
+      
+      if (isMatch) {
+        matches.push({ row: r, col: c });
+      }
+    }
+  }
+  
+  return matches;
+}
+
+function findNext() {
+  const matches = findAll();
+  findReplaceState.matches = matches;
+  
+  if (matches.length === 0) {
+    document.getElementById('find-results').textContent = '未找到匹配项';
+    document.getElementById('btn-replace-current').disabled = true;
+    document.getElementById('btn-replace-all').disabled = true;
+    return;
+  }
+  
+  findReplaceState.currentIndex++;
+  if (findReplaceState.currentIndex >= matches.length) {
+    findReplaceState.currentIndex = 0;
+  }
+  
+  const match = matches[findReplaceState.currentIndex];
+  findReplaceState.currentMatch = match;
+  
+  // 选中单元格
+  hot.selectCell(match.row, match.col);
+  
+  document.getElementById('find-results').textContent = 
+    `找到 ${matches.length} 个匹配项，当前第 ${findReplaceState.currentIndex + 1} 个`;
+  document.getElementById('btn-replace-current').disabled = false;
+  document.getElementById('btn-replace-all').disabled = false;
+}
+
+function replaceCurrent() {
+  if (!findReplaceState.currentMatch || !hot) return;
+  
+  const replaceText = document.getElementById('replace-text').value;
+  const { row, col } = findReplaceState.currentMatch;
+  
+  hot.setDataAtCell(row, col, replaceText);
+  setSaveStatus('已替换');
+  
+  // 继续查找下一个
+  findNext();
+}
+
+function replaceAll() {
+  if (!hot) return;
+  
+  const replaceText = document.getElementById('replace-text').value;
+  const matches = findAll();
+  
+  if (matches.length === 0) return;
+  
+  // 从后往前替换，避免索引变化
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const { row, col } = matches[i];
+    hot.setDataAtCell(row, col, replaceText);
+  }
+  
+  setSaveStatus(`已替换 ${matches.length} 处`);
+  document.getElementById('find-results').textContent = `已替换 ${matches.length} 处`;
+  findReplaceState = { currentMatch: null, matches: [], currentIndex: -1 };
+  document.getElementById('btn-replace-current').disabled = true;
+}
+
+// 键盘快捷键
+document.addEventListener('keydown', function(e) {
+  // Ctrl+F / Cmd+F: 查找
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    e.preventDefault();
+    openFindReplace();
+  }
+  
+  // Ctrl+Z / Cmd+Z: 撤销
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    undo();
+  }
+  
+  // Ctrl+Y / Cmd+Shift+Z: 重做
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+    e.preventDefault();
+    redo();
+  }
+  
+  // Ctrl+S: 保存
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveFile();
+  }
+  
+  // Ctrl+B: 加粗
+  if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+    e.preventDefault();
+    applyStyle('bold');
+  }
+  
+  // Ctrl+I: 斜体
+  if ((e.ctrlKey || e.metaKey) && e.key === 'i') {
+    e.preventDefault();
+    applyStyle('italic');
+  }
+  
+  // Ctrl+U: 下划线
+  if ((e.ctrlKey || e.metaKey) && e.key === 'u') {
+    e.preventDefault();
+    applyStyle('underline');
+  }
+});
+
+// Enter键在查找框中触发查找
+document.getElementById('find-text').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    findNext();
+  }
+});
+
 // 自定义渲染器
 function styledCellRenderer(instance, td, row, col, prop, value, cellProperties) {
   // 调用默认渲染器
@@ -521,7 +749,7 @@ socket.on('file_opened', data => {
   currentFilePath = data.path;
   currentReadonly = data.readonly;
   myUserColor = data.my_color || '';
-  cellStyles = data.cell_styles || {};
+  cellStyles = data.cell_styles || {};  // 加载持久化的样式
   
   document.getElementById('filename-display').textContent = data.filename || data.path;
   document.getElementById('readonly-badge').style.display = currentReadonly ? 'inline-block' : 'none';
@@ -568,16 +796,16 @@ socket.on('cell_updated', data => {
   setSaveStatus(username + ' 正在编辑…');
 });
 
-socket.on('cell_style_changed', data => {
-  const { sheet, row, col, style, value } = data;
+socket.on('cell_style_updated', data => {
+  const { sheet, row, col, style_type, value } = data;
   if (!cellStyles[sheet]) cellStyles[sheet] = {};
   if (!cellStyles[sheet][row]) cellStyles[sheet][row] = {};
   if (!cellStyles[sheet][row][col]) cellStyles[sheet][row][col] = {};
   
-  if (style === 'clear') {
-    delete cellStyles[sheet][row][col];
+  if (value === '' || value === false) {
+    delete cellStyles[sheet][row][col][style_type];
   } else {
-    cellStyles[sheet][row][col][style] = value;
+    cellStyles[sheet][row][col][style_type] = value;
   }
   
   if (sheet === currentSheet && hot) {
@@ -699,6 +927,8 @@ function initTable(data) {
     readOnly: currentReadonly,
     renderer: styledCellRenderer,
     licenseKey: 'non-commercial-and-evaluation',
+    // 启用撤销/重做
+    undo: true,
     afterSelection: function(row, col, row2, col2) {
       currentSelection = [row, col, row2, col2];
       lastSelection = [row, col, row2, col2];  // 备份选区

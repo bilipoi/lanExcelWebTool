@@ -12,6 +12,7 @@ from config import DATA_DIR
 from utils import safe_join, rel_path
 from services.file_tree import build_tree
 from services.meta_service import get_file_meta, load_meta, save_meta
+from services.style_service import delete_styles
 from models.session import file_sessions
 
 
@@ -100,6 +101,9 @@ def delete_file(rel: str) -> tuple:
     meta = load_meta()
     meta.pop(rel, None)
     save_meta(meta)
+    
+    # 删除样式文件
+    delete_styles(filepath)
     
     return True, {'tree': build_tree()}
 
