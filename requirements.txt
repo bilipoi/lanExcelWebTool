@@ -1,0 +1,6 @@
+Flask
+Flask-SocketIO
+pandas
+openpyxl
+gevent
+gevent-websocket

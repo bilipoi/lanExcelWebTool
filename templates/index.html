@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>局域网多人 Excel 编辑器</title>
+  <link rel="stylesheet" href="/static/css/handsontable.full.min.css">
+  <script src="/static/js/handsontable.full.min.js"></script>
+  <script src="/static/js/socket.io.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Microsoft YaHei',sans-serif;background:#f0f2f5;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+
+    /* 顶部工具栏 */
+    #toolbar{background:#1e3a5f;color:#fff;padding:7px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0;}
+    #toolbar h1{font-size:15px;margin-right:6px;white-space:nowrap;}
+    #filename-display{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:4px;font-size:13px;min-width:120px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    #readonly-badge{background:#e74c3c;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;display:none;}
+    .btn{padding:4px 11px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#2d6a9f;color:#fff;transition:background .2s;white-space:nowrap;}
+    .btn:hover{background:#3a82c4;}
+    .btn.green{background:#27ae60;} .btn.green:hover{background:#2ecc71;}
+    .btn.orange{background:#e67e22;} .btn.orange:hover{background:#f39c12;}
+    .btn.red{background:#c0392b;} .btn.red:hover{background:#e74c3c;}
+    .btn.gray{background:#7f8c8d;} .btn.gray:hover{background:#95a5a6;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+
+    /* 本地样式工具栏 */
+    #style-toolbar{background:#fff;border-bottom:1px solid #ddd;padding:8px 14px;display:none;align-items:center;gap:12px;flex-shrink:0;box-shadow:0 2px 4px rgba(0,0,0,0.05);}
+    #style-toolbar.visible{display:flex;}
+    .style-group{display:flex;align-items:center;gap:4px;padding:0 8px;border-right:1px solid #e0e0e0;}
+    .style-group:last-child{border-right:none;}
+    .style-btn{width:32px;height:28px;border:1px solid #ddd;border-radius:3px;background:#fff;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .2s;}
+    .style-btn:hover{background:#f5f5f5;border-color:#999;}
+    .style-btn.active{background:#e3f2fd;border-color:#2196f3;color:#2196f3;}
+    .style-btn:disabled{opacity:.5;cursor:not-allowed;}
+    .color-btn{width:32px;height:28px;border:1px solid #ddd;border-radius:3px;cursor:pointer;position:relative;overflow:hidden;padding:0;}
+    .color-btn:hover{border-color:#999;}
+    .color-btn .indicator{position:absolute;bottom:3px;left:50%;transform:translateX(-50%);width:16px;height:3px;border-radius:2px;}
+    .color-picker{display:none;position:absolute;top:100%;left:0;background:#fff;border:1px solid #ddd;border-radius:4px;padding:8px;box-shadow:0 4px 16px rgba(0,0,0,.2);z-index:2001;}
+    .color-picker.visible{display:block;}
+    .color-option{width:22px;height:22px;border:1px solid #ddd;border-radius:3px;cursor:pointer;margin:2px;display:inline-block;}
+    .color-option:hover{border-color:#333;transform:scale(1.1);}
+    .font-size-select{height:28px;padding:0 8px;border:1px solid #ddd;border-radius:3px;background:#fff;font-size:12px;cursor:pointer;min-width:60px;}
+    .font-size-select:focus{outline:none;border-color:#2196f3;}
+
+    /* 状态栏 */
+    #statusbar{background:#2c3e50;color:#ecf0f1;padding:3px 14px;font-size:12px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
+    #users-list{display:flex;gap:5px;flex-wrap:wrap;}
+    .user-badge{background:#3498db;padding:1px 7px;border-radius:10px;font-size:11px;}
+    #save-status{margin-left:auto;color:#2ecc71;font-size:12px;}
+
+    /* 主区域 */
+    #main{display:flex;flex:1;overflow:hidden;}
+
+    /* 左侧文件树 */
+    #sidebar{width:230px;background:#fff;border-right:1px solid #dde3ea;display:flex;flex-direction:column;flex-shrink:0;}
+    #sidebar-header{background:#eaf0f6;padding:7px 10px;font-size:12px;font-weight:bold;color:#2c3e50;display:flex;align-items:center;justify-content:space-between;}
+    #sidebar-header span{font-size:13px;}
+    .sidebar-actions{display:flex;gap:4px;}
+    .icon-btn{background:none;border:none;cursor:pointer;color:#555;font-size:14px;padding:2px 5px;border-radius:3px;}
+    .icon-btn:hover{background:#dde3ea;}
+    #file-tree{flex:1;overflow-y:auto;padding:4px 0;}
+
+    .tree-item{padding:4px 8px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:5px;user-select:none;border-radius:3px;margin:1px 4px;}
+    .tree-item:hover{background:#eaf0f6;}
+    .tree-item.active{background:#d0eaff;color:#1e3a5f;font-weight:bold;}
+    .tree-folder{color:#e67e22;font-size:14px;}
+    .tree-file-icon{color:#27ae60;font-size:13px;}
+    .tree-readonly-icon{color:#e74c3c;font-size:11px;margin-left:auto;}
+    .tree-online-count{background:#3498db;color:#fff;font-size:10px;padding:1px 5px;border-radius:8px;margin-left:4px;}
+    .tree-children{padding-left:16px;}
+    .tree-toggle{color:#999;font-size:10px;width:12px;text-align:center;flex-shrink:0;}
+
+    /* 右侧编辑区 */
+    #editor-area{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+    #sheet-tabs{background:#dde3ea;padding:4px 14px 0;display:flex;gap:4px;flex-shrink:0;}
+    .sheet-tab{padding:4px 13px;background:#c5cdd6;border-radius:4px 4px 0 0;cursor:pointer;font-size:12px;border:1px solid #b0bac5;border-bottom:none;}
+    .sheet-tab.active{background:#fff;font-weight:bold;color:#1e3a5f;}
+    #table-container{flex:1;position:relative;overflow:hidden;}
+    #hot-container{position:absolute;inset:0;}
+    #no-file-tip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:15px;background:#fafafa;z-index:10;}
+
+    /* 协作指示器 */
+    .collab-cursor{position:absolute;pointer-events:none;z-index:100;transition:all .2s ease;}
+    .collab-cursor-border{position:absolute;border:2px solid;border-radius:2px;pointer-events:none;inset:0;}
+    .collab-cursor-label{position:absolute;top:-20px;left:-2px;padding:2px 6px;border-radius:3px;font-size:11px;color:#fff;font-weight:bold;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,.2);pointer-events:none;}
+    .collab-cursor-dot{position:absolute;width:6px;height:6px;border-radius:50%;top:-3px;left:-3px;pointer-events:none;}
+
+    /* 右键菜单 */
+    #ctx-menu{position:fixed;background:#fff;border:1px solid #ddd;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:2000;min-width:150px;display:none;padding:4px 0;}
+    .ctx-item{padding:7px 16px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px;}
+    .ctx-item:hover{background:#eaf0f6;}
+    .ctx-item.danger{color:#e74c3c;}
+    .ctx-sep{border-top:1px solid #eee;margin:3px 0;}
+
+    /* 模态框 */
+    .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1500;align-items:center;justify-content:center;}
+    .modal-overlay.show{display:flex;}
+    .modal{background:#fff;border-radius:8px;padding:22px;min-width:310px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,.2);}
+    .modal h2{margin-bottom:14px;color:#1e3a5f;font-size:15px;}
+    .modal input,.modal select{width:100%;padding:7px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-bottom:10px;}
+    .modal-btns{display:flex;gap:8px;justify-content:flex-end;}
+    .snap-list{max-height:220px;overflow-y:auto;margin-bottom:10px;}
+    .snap-item{padding:7px 10px;border:1px solid #eee;border-radius:4px;cursor:pointer;margin-bottom:4px;font-size:12px;display:flex;justify-content:space-between;align-items:center;}
+    .snap-item:hover{background:#eaf0f6;}
+    .snap-item .snap-restore{color:#2980b9;font-size:11px;}
+  </style>
+</head>
+<body>
+
+<!-- 顶部工具栏 -->
+<div id="toolbar">
+  <h1>📊 局域网 Excel 编辑器</h1>
+  <span id="filename-display">未打开文件</span>
+  <span id="readonly-badge">只读</span>
+  <button class="btn orange" id="btn-save" onclick="saveFile()" disabled>保存</button>
+  <button class="btn" id="btn-download" onclick="downloadFile()" disabled>下载</button>
+  <button class="btn" id="btn-versions" onclick="showVersions()" disabled>版本历史</button>
+  <button class="btn gray" id="btn-leave" onclick="leaveCurrentFile()" disabled>离开文件</button>
+  <input type="file" id="upload-input" accept=".xlsx" style="display:none" onchange="handleUpload(event)">
+</div>
+
+<!-- 本地样式工具栏 -->
+<div id="style-toolbar">
+  <div class="style-group">
+    <button class="style-btn" id="btn-bold" title="加粗" onclick="applyStyle('bold')" onmousedown="event.preventDefault()"><b>B</b></button>
+    <button class="style-btn" id="btn-italic" title="斜体" onclick="applyStyle('italic')" onmousedown="event.preventDefault()"><i>I</i></button>
+    <button class="style-btn" id="btn-underline" title="下划线" onclick="applyStyle('underline')" onmousedown="event.preventDefault()"><u>U</u></button>
+  </div>
+  <div class="style-group">
+    <select class="font-size-select" id="font-size" name="font-size" onchange="applyStyle('fontSize', this.value)">
+      <option value="">字号</option>
+      <option value="10">10</option>
+      <option value="11">11</option>
+      <option value="12">12</option>
+      <option value="14">14</option>
+      <option value="16">16</option>
+      <option value="18">18</option>
+      <option value="20">20</option>
+      <option value="24">24</option>
+    </select>
+  </div>
+  <div class="style-group" style="position:relative;">
+    <button class="style-btn color-btn" id="btn-color" title="文字颜色" onclick="toggleColorPicker('color')" onmousedown="event.preventDefault()">
+      <span style="font-size:14px;">A</span>
+      <span class="indicator" id="color-indicator" style="background:#000;"></span>
+    </button>
+    <div class="color-picker" id="color-picker">
+      <div style="display:flex;flex-wrap:wrap;width:104px;">
+        <button class="color-option" style="background:#000" onclick="applyStyle('color', '#000000'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#333" onclick="applyStyle('color', '#333333'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#666" onclick="applyStyle('color', '#666666'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#999" onclick="applyStyle('color', '#999999'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#c00" onclick="applyStyle('color', '#cc0000'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#f00" onclick="applyStyle('color', '#ff0000'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#f90" onclick="applyStyle('color', '#ff9900'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#ff0" onclick="applyStyle('color', '#ffff00'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#0c0" onclick="applyStyle('color', '#00cc00'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#0f0" onclick="applyStyle('color', '#00ff00'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#00c" onclick="applyStyle('color', '#0000cc'); hideColorPicker('color')"></button>
+        <button class="color-option" style="background:#00f" onclick="applyStyle('color', '#0000ff'); hideColorPicker('color')"></button>
+      </div>
+    </div>
+  </div>
+  <div class="style-group" style="position:relative;">
+    <button class="style-btn color-btn" id="btn-bgcolor" title="背景颜色" onclick="toggleColorPicker('bg')" onmousedown="event.preventDefault()">
+      <span>▦</span>
+      <span class="indicator" id="bg-indicator" style="background:transparent;border:1px solid #ddd;"></span>
+    </button>
+    <div class="color-picker" id="bg-picker">
+      <div style="display:flex;flex-wrap:wrap;width:104px;">
+        <button class="color-option" style="background:transparent;border:2px solid #ddd;" onclick="applyStyle('bgColor', ''); hideColorPicker('bg')" title="无填充"></button>
+        <button class="color-option" style="background:#fff" onclick="applyStyle('bgColor', '#ffffff'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#f5f5f5" onclick="applyStyle('bgColor', '#f5f5f5'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#e8e8e8" onclick="applyStyle('bgColor', '#e8e8e8'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#ffcccc" onclick="applyStyle('bgColor', '#ffcccc'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#ccffcc" onclick="applyStyle('bgColor', '#ccffcc'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#ccccff" onclick="applyStyle('bgColor', '#ccccff'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#ffffcc" onclick="applyStyle('bgColor', '#ffffcc'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#ccffff" onclick="applyStyle('bgColor', '#ccffff'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#ffccff" onclick="applyStyle('bgColor', '#ffccff'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#ff6b6b" onclick="applyStyle('bgColor', '#ff6b6b'); hideColorPicker('bg')"></button>
+        <button class="color-option" style="background:#4ecdc4" onclick="applyStyle('bgColor', '#4ecdc4'); hideColorPicker('bg')"></button>
+      </div>
+    </div>
+  </div>
+  <div class="style-group">
+    <button class="style-btn" id="btn-align-left" title="左对齐" onclick="applyStyle('align', 'left')" onmousedown="event.preventDefault()">⬅</button>
+    <button class="style-btn" id="btn-align-center" title="居中" onclick="applyStyle('align', 'center')" onmousedown="event.preventDefault()">⬌</button>
+    <button class="style-btn" id="btn-align-right" title="右对齐" onclick="applyStyle('align', 'right')" onmousedown="event.preventDefault()">➡</button>
+  </div>
+  <div class="style-group">
+    <button class="style-btn" onclick="clearCellStyle()" title="清除格式" style="width:auto;padding:0 8px;" onmousedown="event.preventDefault()">✕ 清除</button>
+  </div>
+</div>
+
+<!-- 状态栏 -->
+<div id="statusbar">
+  <span>当前文件在线用户：</span>
+  <div id="users-list"></div>
+  <span id="save-status"></span>
+</div>
+
+<!-- 主区域 -->
+<div id="main">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span>文件管理</span>
+      <div class="sidebar-actions">
+        <button class="icon-btn" title="新建文件夹" onclick="promptCreateFolder()">📁+</button>
+        <button class="icon-btn" title="新建文件" onclick="promptCreateFile()">📄+</button>
+        <button class="icon-btn" title="上传文件" onclick="triggerUpload()">⬆</button>
+      </div>
+    </div>
+    <div id="file-tree"></div>
+  </div>
+
+  <div id="editor-area">
+    <div id="sheet-tabs"></div>
+    <div id="table-container">
+      <div id="hot-container"></div>
+      <div id="no-file-tip">请从左侧选择或新建文件</div>
+    </div>
+  </div>
+</div>
+
+<!-- 右键菜单 -->
+<div id="ctx-menu">
+  <div class="ctx-item" id="ctx-open">📂 打开</div>
+  <div class="ctx-item" id="ctx-rename">✏️ 重命名</div>
+  <div class="ctx-item" id="ctx-move">↕️ 移动到文件夹</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" id="ctx-readonly">🔒 切换只读</div>
+  <div class="ctx-item" id="ctx-versions">🕐 版本历史</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item danger" id="ctx-delete">🗑️ 删除</div>
+</div>
+
+<!-- 登录模态框 -->
+<div class="modal-overlay show" id="login-modal">
+  <div class="modal">
+    <h2>欢迎使用局域网 Excel 编辑器</h2>
+    <input type="text" id="username-input" placeholder="请输入你的名字" maxlength="20" autofocus>
+    <div class="modal-btns">
+      <button class="btn green" onclick="joinSession()">进入</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-new-folder">
+  <div class="modal">
+    <h2>新建文件夹</h2>
+    <input type="text" id="new-folder-name" placeholder="文件夹名称">
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeModal('modal-new-folder')">取消</button>
+      <button class="btn green" onclick="doCreateFolder()">创建</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-new-file">
+  <div class="modal">
+    <h2>新建文件</h2>
+    <input type="text" id="new-file-name" placeholder="文件名（不含扩展名）">
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeModal('modal-new-file')">取消</button>
+      <button class="btn green" onclick="doCreateFile()">创建</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-rename">
+  <div class="modal">
+    <h2>重命名</h2>
+    <input type="text" id="rename-input" placeholder="新名称">
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeModal('modal-rename')">取消</button>
+      <button class="btn green" onclick="doRename()">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-move">
+  <div class="modal">
+    <h2>移动到文件夹</h2>
+    <select id="move-target" name="move-target"></select>
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeModal('modal-move')">取消</button>
+      <button class="btn green" onclick="doMove()">移动</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-versions">
+  <div class="modal">
+    <h2>版本历史</h2>
+    <div class="snap-list" id="snap-list"></div>
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeModal('modal-versions')">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== 全局变量 ====================
+var socket = io();
+var hot = null;
+var sheetsData = {};
+var currentSheet = null;
+var currentFilePath = null;
+var currentReadonly = false;
+var myUsername = '';
+var isRemoteUpdate = false;
+var myUserColor = '';
+var otherUsersSelections = {};
+var ctxTarget = null;
+var ctxParentFolder = '';
+var treeData = [];
+
+// 本地单元格样式存储：{sheetName: {row: {col: {bold, italic, fontSize, color, bgColor, align}}}}
+var cellStyles = {};
+var currentSelection = null;
+var lastSelection = null;  // 备份最后一次选区
+
+// ==================== 工具函数 ====================
+function deepCopy(data) { return data.map(r => r.slice()); }
+
+function setSaveStatus(msg, color) {
+  const el = document.getElementById('save-status');
+  el.style.color = color || '#2ecc71';
+  el.textContent = msg;
+  if (msg) setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 3000);
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+
+// ==================== 本地样式系统 ====================
+function showStyleToolbar(show) {
+  const toolbar = document.getElementById('style-toolbar');
+  if (show) toolbar.classList.add('visible');
+  else toolbar.classList.remove('visible');
+}
+
+function toggleColorPicker(type) {
+  const picker = document.getElementById(type === 'color' ? 'color-picker' : 'bg-picker');
+  const otherPicker = document.getElementById(type === 'color' ? 'bg-picker' : 'color-picker');
+  otherPicker.classList.remove('visible');
+  picker.classList.toggle('visible');
+  
+  // 点击其他地方关闭
+  const closeHandler = (e) => {
+    if (!e.target.closest('.color-picker') && !e.target.closest('.color-btn')) {
+      picker.classList.remove('visible');
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+}
+
+function hideColorPicker(type) {
+  document.getElementById(type === 'color' ? 'color-picker' : 'bg-picker').classList.remove('visible');
+}
+
+function getSelectedCells() {
+  if (!hot) return [];
+  
+  // 尝试获取当前选区
+  let selected = hot.getSelected();
+  
+  // 如果没有选区，使用备份
+  if (!selected || selected.length === 0) {
+    selected = lastSelection;
+  }
+  
+  // 确保 selected 是数组
+  if (!selected || !Array.isArray(selected) || selected.length === 0) {
+    return [];
+  }
+  
+  // 确保 selected 是二维数组 [[r1, c1, r2, c2], ...]
+  if (!Array.isArray(selected[0])) {
+    selected = [selected];
+  }
+  
+  const cells = [];
+  selected.forEach(([r1, c1, r2, c2]) => {
+    for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++) {
+      for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c++) {
+        cells.push({row: r, col: c});
+      }
+    }
+  });
+  return cells;
+}
+
+function applyStyle(styleType, value) {
+  if (currentReadonly || !currentSheet) return;
+  
+  const cells = getSelectedCells();
+  if (cells.length === 0) return;
+  
+  // 初始化样式存储
+  if (!cellStyles[currentSheet]) cellStyles[currentSheet] = {};
+  
+  // 处理开关类样式
+  if (styleType === 'bold' || styleType === 'italic' || styleType === 'underline') {
+    const btn = document.getElementById('btn-' + styleType);
+    const isActive = btn.classList.contains('active');
+    value = !isActive;
+    btn.classList.toggle('active', value);
+  }
+  
+  // 处理对齐样式
+  if (styleType === 'align') {
+    ['left', 'center', 'right'].forEach(a => {
+      document.getElementById('btn-align-' + a).classList.toggle('active', a === value);
+    });
+  }
+  
+  // 应用到所有选中单元格
+  cells.forEach(cell => {
+    const {row, col} = cell;
+    if (!cellStyles[currentSheet][row]) cellStyles[currentSheet][row] = {};
+    if (!cellStyles[currentSheet][row][col]) cellStyles[currentSheet][row][col] = {};
+    
+    if (value === '' || value === false) {
+      delete cellStyles[currentSheet][row][col][styleType];
+    } else {
+      cellStyles[currentSheet][row][col][styleType] = value;
+    }
+  });
+  
+  // 更新颜色指示器
+  if (styleType === 'color') {
+    document.getElementById('color-indicator').style.background = value;
+  }
+  if (styleType === 'bgColor') {
+    document.getElementById('bg-indicator').style.background = value || 'transparent';
+  }
+  
+  // 刷新表格
+  if (hot) hot.render();
+}
+
+function clearCellStyle() {
+  if (currentReadonly || !currentSheet) return;
+  
+  const cells = getSelectedCells();
+  if (cells.length === 0) return;
+  
+  cells.forEach(cell => {
+    const {row, col} = cell;
+    if (cellStyles[currentSheet] && cellStyles[currentSheet][row] && cellStyles[currentSheet][row][col]) {
+      delete cellStyles[currentSheet][row][col];
+    }
+  });
+  
+  // 重置工具栏
+  document.querySelectorAll('.style-btn').forEach(btn => btn.classList.remove('active'));
+  document.getElementById('font-size').value = '';
+  document.getElementById('color-indicator').style.background = '#000';
+  document.getElementById('bg-indicator').style.background = 'transparent';
+  
+  if (hot) hot.render();
+}
+
+function updateStyleToolbar(row, col) {
+  if (!currentSheet) return;
+  
+  const style = cellStyles[currentSheet]?.[row]?.[col] || {};
+  
+  document.getElementById('btn-bold').classList.toggle('active', !!style.bold);
+  document.getElementById('btn-italic').classList.toggle('active', !!style.italic);
+  document.getElementById('btn-underline').classList.toggle('active', !!style.underline);
+  document.getElementById('btn-align-left').classList.toggle('active', style.align === 'left');
+  document.getElementById('btn-align-center').classList.toggle('active', style.align === 'center');
+  document.getElementById('btn-align-right').classList.toggle('active', style.align === 'right');
+  document.getElementById('font-size').value = style.fontSize || '';
+  document.getElementById('color-indicator').style.background = style.color || '#000';
+  document.getElementById('bg-indicator').style.background = style.bgColor || 'transparent';
+}
+
+// 自定义渲染器
+function styledCellRenderer(instance, td, row, col, prop, value, cellProperties) {
+  // 调用默认渲染器
+  Handsontable.renderers.TextRenderer(instance, td, row, col, prop, value, cellProperties);
+  
+  // 应用本地样式（不清空，而是覆盖）
+  if (currentSheet && cellStyles[currentSheet]) {
+    const style = cellStyles[currentSheet][row]?.[col] || {};
+    
+    if (style.bold) td.style.fontWeight = 'bold';
+    else td.style.fontWeight = '';
+    
+    if (style.italic) td.style.fontStyle = 'italic';
+    else td.style.fontStyle = '';
+    
+    if (style.underline) td.style.textDecoration = 'underline';
+    else td.style.textDecoration = '';
+    
+    if (style.fontSize) td.style.fontSize = style.fontSize + 'px';
+    else td.style.fontSize = '';
+    
+    if (style.color) td.style.color = style.color;
+    else td.style.color = '';
+    
+    if (style.bgColor) td.style.backgroundColor = style.bgColor;
+    else td.style.backgroundColor = '';
+    
+    if (style.align) td.style.textAlign = style.align;
+    else td.style.textAlign = '';
+  }
+}
+
+// ==================== Socket事件 ====================
+socket.on('connect', () => { loadTree(); });
+
+socket.on('file_opened', data => {
+  sheetsData = data.sheets;
+  currentFilePath = data.path;
+  currentReadonly = data.readonly;
+  myUserColor = data.my_color || '';
+  cellStyles = data.cell_styles || {};
+  
+  document.getElementById('filename-display').textContent = data.filename || data.path;
+  document.getElementById('readonly-badge').style.display = currentReadonly ? 'inline-block' : 'none';
+  document.getElementById('btn-save').disabled = currentReadonly;
+  document.getElementById('btn-download').disabled = false;
+  document.getElementById('btn-versions').disabled = false;
+  document.getElementById('btn-leave').disabled = false;
+  document.getElementById('no-file-tip').style.display = 'none';
+  
+  showStyleToolbar(true);
+  
+  currentSheet = Object.keys(sheetsData)[0];
+  renderTabs();
+  initTable(sheetsData[currentSheet]);
+  renderUsers(data.users || []);
+  setSaveStatus('已加入文件: ' + (data.filename || data.path));
+  highlightTreeItem(currentFilePath);
+});
+
+socket.on('cell_selected', data => {
+  otherUsersSelections[data.sid] = {
+    username: data.username,
+    color: data.color,
+    selection: { sheet: data.sheet, row: data.row, col: data.col }
+  };
+});
+
+socket.on('selection_cleared', data => {
+  removeCollaborationCursor(data.sid);
+});
+
+socket.on('cell_updated', data => {
+  const { sheet, row, col, value, username } = data;
+  if (sheetsData[sheet]) {
+    while (row >= sheetsData[sheet].length) sheetsData[sheet].push([]);
+    while (col >= sheetsData[sheet][row].length) sheetsData[sheet][row].push('');
+    sheetsData[sheet][row][col] = value;
+  }
+  if (sheet === currentSheet && hot) {
+    isRemoteUpdate = true;
+    hot.setDataAtCell(row, col, value, 'remote');
+    setTimeout(() => { isRemoteUpdate = false; }, 0);
+  }
+  setSaveStatus(username + ' 正在编辑…');
+});
+
+socket.on('cell_style_changed', data => {
+  const { sheet, row, col, style, value } = data;
+  if (!cellStyles[sheet]) cellStyles[sheet] = {};
+  if (!cellStyles[sheet][row]) cellStyles[sheet][row] = {};
+  if (!cellStyles[sheet][row][col]) cellStyles[sheet][row][col] = {};
+  
+  if (style === 'clear') {
+    delete cellStyles[sheet][row][col];
+  } else {
+    cellStyles[sheet][row][col][style] = value;
+  }
+  
+  if (sheet === currentSheet && hot) {
+    hot.render();
+  }
+});
+
+socket.on('user_joined', data => {
+  renderUsers(data.users);
+  if (data.username !== myUsername) {
+    setSaveStatus(data.username + ' 加入了编辑');
+  }
+  loadTree();
+});
+
+socket.on('user_left', data => {
+  renderUsers(data.users);
+  setSaveStatus(data.username + ' 离开了', '#e67e22');
+  Object.keys(otherUsersSelections).forEach(sid => {
+    if (otherUsersSelections[sid].username === data.username) {
+      removeCollaborationCursor(sid);
+    }
+  });
+  loadTree();
+});
+
+socket.on('file_readonly_changed', data => {
+  if (data.path === currentFilePath) {
+    currentReadonly = data.readonly;
+    document.getElementById('readonly-badge').style.display = currentReadonly ? 'inline-block' : 'none';
+    document.getElementById('btn-save').disabled = currentReadonly;
+    showStyleToolbar(!currentReadonly);
+    if (hot) hot.updateSettings({ readOnly: currentReadonly });
+    setSaveStatus(currentReadonly ? '文件已设为只读' : '文件已设为可编辑', '#e67e22');
+  }
+  loadTree();
+});
+
+socket.on('file_saved', data => setSaveStatus(data.by + ' 保存了文件', '#3498db'));
+
+socket.on('save_result', data => {
+  if (data.ok) setSaveStatus(data.message, data.saved ? '#2ecc71' : '#95a5a6');
+  else setSaveStatus('保存失败: ' + data.error, '#e74c3c');
+});
+
+socket.on('file_deleted', data => {
+  if (data.path === currentFilePath) {
+    alert('当前文件已被删除，将返回未打开状态');
+    resetEditor();
+  }
+  loadTree();
+});
+
+socket.on('left_file', () => resetEditor());
+
+socket.on('file_data_updated', data => {
+  if (data.path === currentFilePath) {
+    sheetsData = data.sheets;
+    cellStyles = data.cell_styles || {};
+    currentSheet = Object.keys(sheetsData)[0];
+    renderTabs();
+    initTable(sheetsData[currentSheet]);
+    setSaveStatus('文件内容已更新', '#e67e22');
+  }
+});
+
+socket.on('error', data => setSaveStatus('错误: ' + data.message, '#e74c3c'));
+
+function renderUsers(users) {
+  if (!Array.isArray(users)) {
+    document.getElementById('users-list').innerHTML = '';
+    return;
+  }
+  document.getElementById('users-list').innerHTML = users.map(u => {
+    const username = (typeof u === 'object' && u !== null) ? (u.username || u.name || '未知') : u;
+    return '<span class="user-badge">' + username + '</span>';
+  }).join('');
+}
+
+function resetEditor() {
+  if (hot) { hot.destroy(); hot = null; }
+  sheetsData = {};
+  cellStyles = {};
+  currentSheet = null;
+  currentFilePath = null;
+  currentReadonly = false;
+  myUserColor = '';
+  currentSelection = null;
+  lastSelection = null;  // 重置备份选区
+  clearAllCollaborationCursors();
+  showStyleToolbar(false);
+  document.getElementById('filename-display').textContent = '未打开文件';
+  document.getElementById('readonly-badge').style.display = 'none';
+  document.getElementById('btn-save').disabled = true;
+  document.getElementById('btn-download').disabled = true;
+  document.getElementById('btn-versions').disabled = true;
+  document.getElementById('btn-leave').disabled = true;
+  document.getElementById('no-file-tip').style.display = 'flex';
+  document.getElementById('sheet-tabs').innerHTML = '';
+  document.getElementById('users-list').innerHTML = '';
+  highlightTreeItem(null);
+}
+
+// ==================== 表格初始化 ====================
+function initTable(data) {
+  const container = document.getElementById('hot-container');
+  if (hot) { hot.destroy(); hot = null; }
+  
+  hot = new Handsontable(container, {
+    data: deepCopy(data),
+    rowHeaders: true,
+    colHeaders: true,
+    contextMenu: true,
+    manualColumnResize: true,
+    manualRowResize: true,
+    minRows: 50, minCols: 26,
+    width: '100%', height: '100%',
+    stretchH: 'all',
+    readOnly: currentReadonly,
+    renderer: styledCellRenderer,
+    licenseKey: 'non-commercial-and-evaluation',
+    afterSelection: function(row, col, row2, col2) {
+      currentSelection = [row, col, row2, col2];
+      lastSelection = [row, col, row2, col2];  // 备份选区
+      if (currentFilePath && !isRemoteUpdate) {
+        socket.emit('cell_select', { sheet: currentSheet, row, col });
+      }
+      updateStyleToolbar(row, col);
+    },
+    afterDeselect: function() {
+      currentSelection = null;
+      if (currentFilePath && !isRemoteUpdate) {
+        socket.emit('cell_deselect');
+      }
+    },
+    afterChange: function(changes, source) {
+      if (!changes || source === 'loadData' || isRemoteUpdate || currentReadonly) return;
+      changes.forEach(function(c) {
+        var row = c[0], col = c[1], newVal = c[3];
+        if (sheetsData[currentSheet]) {
+          while (row >= sheetsData[currentSheet].length) sheetsData[currentSheet].push([]);
+          while (col >= sheetsData[currentSheet][row].length) sheetsData[currentSheet][row].push('');
+          sheetsData[currentSheet][row][col] = (newVal === null ? '' : String(newVal));
+        }
+        socket.emit('cell_edit', {
+          sheet: currentSheet, row: row,
+          col: typeof col === 'number' ? col : hot.propToCol(col),
+          value: newVal === null ? '' : String(newVal)
+        });
+      });
+    }
+  });
+  
+  hot.addHook('afterScroll', () => setTimeout(updateCollaborationCursors, 10));
+  hot.addHook('afterRender', () => updateCollaborationCursors());
+  setTimeout(updateCollaborationCursors, 100);
+}
+
+function updateCollaborationCursors() {
+  document.querySelectorAll('.collab-cursor').forEach(el => el.remove());
+  if (!hot || !currentSheet) return;
+  
+  Object.entries(otherUsersSelections).forEach(([sid, userInfo]) => {
+    if (!userInfo.selection || userInfo.selection.sheet !== currentSheet) return;
+    const { row, col } = userInfo.selection;
+    const color = userInfo.color;
+    const username = userInfo.username;
+    
+    const td = hot.getCell(row, col);
+    if (!td) return;
+    
+    const container = document.querySelector('#hot-container .ht_master.handsontable');
+    if (!container) return;
+    
+    const wtHolder = container.querySelector('.wtHolder');
+    if (!wtHolder) return;
+    
+    const cursor = document.createElement('div');
+    cursor.className = 'collab-cursor';
+    cursor.id = 'collab-cursor-' + sid;
+    cursor.style.cssText = `position:absolute;left:${td.offsetLeft}px;top:${td.offsetTop}px;width:${td.offsetWidth}px;height:${td.offsetHeight}px;pointer-events:none;z-index:100;transition:all 0.2s ease;`;
+    
+    cursor.innerHTML = `
+      <div class="collab-cursor-border" style="position:absolute;inset:0;border:2px solid ${color};border-radius:2px;pointer-events:none;"></div>
+      <div class="collab-cursor-label" style="position:absolute;top:-20px;left:-2px;padding:2px 6px;background-color:${color};color:white;font-size:11px;font-weight:bold;border-radius:3px;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,0.2);pointer-events:none;">${username}</div>
+      <div class="collab-cursor-dot" style="position:absolute;width:6px;height:6px;background-color:${color};border-radius:50%;top:-3px;left:-3px;pointer-events:none;"></div>
+    `;
+    
+    wtHolder.appendChild(cursor);
+  });
+}
+
+function removeCollaborationCursor(sid) {
+  const cursor = document.getElementById('collab-cursor-' + sid);
+  if (cursor) cursor.remove();
+  delete otherUsersSelections[sid];
+}
+
+function clearAllCollaborationCursors() {
+  document.querySelectorAll('.collab-cursor').forEach(el => el.remove());
+  otherUsersSelections = {};
+}
+
+function renderTabs() {
+  const el = document.getElementById('sheet-tabs');
+  el.innerHTML = '';
+  Object.keys(sheetsData).forEach(name => {
+    const tab = document.createElement('div');
+    tab.className = 'sheet-tab' + (name === currentSheet ? ' active' : '');
+    tab.textContent = name;
+    tab.onclick = () => {
+      currentSheet = name;
+      renderTabs();
+      initTable(sheetsData[name]);
+      socket.emit('cell_deselect');
+    };
+    el.appendChild(tab);
+  });
+}
+
+function openFile(path) {
+  socket.emit('join_file', { path: path, username: myUsername });
+}
+
+function leaveCurrentFile() {
+  if (!currentFilePath) return;
+  socket.emit('leave_file', { path: currentFilePath });
+}
+
+function saveFile() {
+  if (currentReadonly || !currentFilePath) return;
+  socket.emit('save_file');
+}
+
+function downloadFile() {
+  if (!currentFilePath) return;
+  window.location.href = '/api/file/download?path=' + encodeURIComponent(currentFilePath);
+}
+
+function joinSession() {
+  const input = document.getElementById('username-input');
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  myUsername = name;
+  closeModal('login-modal');
+}
+
+document.getElementById('username-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') joinSession();
+});
+
+async function loadTree() {
+  const res = await fetch('/api/tree');
+  treeData = await res.json();
+  renderTree(treeData, document.getElementById('file-tree'), '');
+}
+
+function renderTree(nodes, container, parentPath) {
+  container.innerHTML = '';
+  nodes.forEach(node => {
+    if (node.type === 'folder') {
+      const wrap = document.createElement('div');
+      const item = document.createElement('div');
+      item.className = 'tree-item';
+      item.innerHTML = '<span class="tree-toggle">▶</span><span class="tree-folder">📁</span><span>' + node.name + '</span>';
+      const children = document.createElement('div');
+      children.className = 'tree-children';
+      children.style.display = 'none';
+      renderTree(node.children, children, node.path);
+      item.onclick = e => {
+        e.stopPropagation();
+        const open = children.style.display !== 'none';
+        children.style.display = open ? 'none' : 'block';
+        item.querySelector('.tree-toggle').textContent = open ? '▶' : '▼';
+      };
+      item.addEventListener('contextmenu', e => {
+        e.preventDefault(); e.stopPropagation();
+        showCtxMenu(e, { type: 'folder', path: node.path, name: node.name });
+      });
+      wrap.appendChild(item);
+      wrap.appendChild(children);
+      container.appendChild(wrap);
+    } else {
+      const item = document.createElement('div');
+      item.className = 'tree-item' + (node.path === currentFilePath ? ' active' : '');
+      item.dataset.path = node.path;
+      let onlineBadge = node.online_count > 0 ? '<span class="tree-online-count">' + node.online_count + '</span>' : '';
+      item.innerHTML = '<span class="tree-toggle"></span><span class="tree-file-icon">📄</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + node.name + '">' + node.name + '</span>' + onlineBadge + (node.readonly ? '<span class="tree-readonly-icon" title="只读">🔒</span>' : '');
+      item.onclick = e => { e.stopPropagation(); openFile(node.path); };
+      item.addEventListener('contextmenu', e => {
+        e.preventDefault(); e.stopPropagation();
+        showCtxMenu(e, { type: 'file', path: node.path, name: node.name, readonly: node.readonly });
+      });
+      container.appendChild(item);
+    }
+  });
+}
+
+function highlightTreeItem(path) {
+  document.querySelectorAll('.tree-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.path === path);
+  });
+}
+
+function promptCreateFolder() { ctxParentFolder = ''; openModal('modal-new-folder'); document.getElementById('new-folder-name').value = ''; }
+function promptCreateFile() { ctxParentFolder = ''; openModal('modal-new-file'); document.getElementById('new-file-name').value = ''; }
+function triggerUpload() { document.getElementById('upload-input').click(); }
+
+async function doCreateFolder() {
+  const name = document.getElementById('new-folder-name').value.trim();
+  if (!name) return;
+  const res = await fetch('/api/folder/create', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ parent: ctxParentFolder, name })
+  });
+  const d = await res.json();
+  if (d.error) return alert(d.error);
+  closeModal('modal-new-folder');
+  loadTree();
+}
+
+async function doCreateFile() {
+  const name = document.getElementById('new-file-name').value.trim();
+  const res = await fetch('/api/file/create', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ parent: ctxParentFolder, name: name || undefined })
+  });
+  const d = await res.json();
+  if (d.error) return alert(d.error);
+  closeModal('modal-new-file');
+  if (d.path) openFile(d.path);
+  loadTree();
+}
+
+async function handleUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('parent', ctxParentFolder);
+  const res = await fetch('/api/file/upload', { method: 'POST', body: form });
+  const d = await res.json();
+  if (d.error) alert(d.error);
+  else if (d.path) openFile(d.path);
+  e.target.value = '';
+  loadTree();
+}
+
+async function showVersions() {
+  if (!currentFilePath) return;
+  const res = await fetch('/api/snapshots?path=' + encodeURIComponent(currentFilePath));
+  const snaps = await res.json();
+  const list = document.getElementById('snap-list');
+  if (!snaps.length) {
+    list.innerHTML = '<div style="color:#aaa;font-size:13px;padding:8px">暂无版本快照</div>';
+  } else {
+    list.innerHTML = snaps.map(s => '<div class="snap-item"><span>' + s.label + '</span><span class="snap-restore" onclick="restoreSnap(\'' + currentFilePath + '\',\'' + s.name + '\')">↩ 恢复</span></div>').join('');
+  }
+  openModal('modal-versions');
+}
+
+async function restoreSnap(path, snapName) {
+  if (!confirm('确定要恢复到该版本吗？')) return;
+  const res = await fetch('/api/snapshots/restore', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ path, snapshot: snapName })
+  });
+  const d = await res.json();
+  if (d.error) return alert(d.error);
+  closeModal('modal-versions');
+  setSaveStatus('已恢复到选定版本', '#e67e22');
+}
+
+function showCtxMenu(e, target) {
+  ctxTarget = target;
+  const menu = document.getElementById('ctx-menu');
+  const isFile = target.type === 'file';
+  document.getElementById('ctx-open').style.display = isFile ? '' : 'none';
+  document.getElementById('ctx-move').style.display = isFile ? '' : 'none';
+  document.getElementById('ctx-readonly').style.display = isFile ? '' : 'none';
+  document.getElementById('ctx-versions').style.display = isFile ? '' : 'none';
+  if (isFile) document.getElementById('ctx-readonly').textContent = target.readonly ? '🔓 取消只读' : '🔒 设为只读';
+  menu.style.display = 'block';
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 170) + 'px';
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 200) + 'px';
+}
+
+document.addEventListener('click', () => { document.getElementById('ctx-menu').style.display = 'none'; });
+document.getElementById('ctx-open').onclick = () => { if (ctxTarget) openFile(ctxTarget.path); };
+document.getElementById('ctx-rename').onclick = () => { if (!ctxTarget) return; document.getElementById('rename-input').value = ctxTarget.name.replace(/\.xlsx$/, ''); openModal('modal-rename'); };
+
+async function doRename() {
+  if (!ctxTarget) return;
+  const name = document.getElementById('rename-input').value.trim();
+  if (!name) return;
+  const url = ctxTarget.type === 'folder' ? '/api/folder/rename' : '/api/file/rename';
+  const res = await fetch(url, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ path: ctxTarget.path, name })
+  });
+  const d = await res.json();
+  if (d.error) return alert(d.error);
+  closeModal('modal-rename');
+  loadTree();
+}
+
+document.getElementById('ctx-move').onclick = async () => {
+  if (!ctxTarget || ctxTarget.type !== 'file') return;
+  const folders = [{ path: '', label: '(根目录)' }];
+  function collectFolders(nodes, prefix) {
+    nodes.forEach(n => {
+      if (n.type === 'folder') {
+        folders.push({ path: n.path, label: prefix + n.name });
+        collectFolders(n.children, prefix + n.name + '/');
+      }
+    });
+  }
+  collectFolders(treeData, '');
+  document.getElementById('move-target').innerHTML = folders.map(f => '<option value="' + f.path + '">' + f.label + '</option>').join('');
+  openModal('modal-move');
+};
+
+async function doMove() {
+  if (!ctxTarget) return;
+  const folder = document.getElementById('move-target').value;
+  const res = await fetch('/api/file/move', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ path: ctxTarget.path, folder })
+  });
+  const d = await res.json();
+  if (d.error) return alert(d.error);
+  closeModal('modal-move');
+  loadTree();
+}
+
+document.getElementById('ctx-readonly').onclick = async () => {
+  if (!ctxTarget || ctxTarget.type !== 'file') return;
+  const res = await fetch('/api/file/readonly', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ path: ctxTarget.path, readonly: !ctxTarget.readonly })
+  });
+  const d = await res.json();
+  if (d.error) return alert(d.error);
+  loadTree();
+};
+
+document.getElementById('ctx-versions').onclick = async () => { if (!ctxTarget || ctxTarget.type !== 'file') return; await showVersions(); };
+document.getElementById('ctx-delete').onclick = async () => {
+  if (!ctxTarget) return;
+  const label = ctxTarget.type === 'folder' ? '文件夹（及其所有内容）' : '文件';
+  if (!confirm('确定要删除该' + label + '吗？')) return;
+  const url = ctxTarget.type === 'folder' ? '/api/folder/delete' : '/api/file/delete';
+  const res = await fetch(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ path: ctxTarget.path }) });
+  const d = await res.json();
+  if (d.error) return alert(d.error);
+  loadTree();
+};
+</script>
+</body>
+</html>
