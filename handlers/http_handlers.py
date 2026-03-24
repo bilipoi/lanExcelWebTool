@@ -4,10 +4,11 @@ HTTP 路由处理程序
 import os
 from flask import render_template, request, jsonify, send_file
 from typing import Any
+from datetime import datetime
 
 from services.file_tree import build_tree
 from services.folder_service import create_folder, rename_folder, delete_folder
-from services.file_service import create_file, rename_file, move_file, delete_file, set_readonly
+from services.file_service import create_file, rename_file, move_file, delete_file, set_readonly, upload_file
 from services.snapshot_service import list_snapshots, restore_snapshot
 from services.meta_service import get_file_meta
 from utils import safe_join
@@ -113,6 +114,23 @@ def register_http_handlers(app):
         success, result = set_readonly(rel, readonly)
         return jsonify(result)
     
+    @app.route('/api/file/upload', methods=['POST'])
+    def api_file_upload():
+        """上传文件"""
+        if 'file' not in request.files:
+            return jsonify({'error': '未选择文件'}), 400
+        
+        file = request.files['file']
+        parent: str = request.form.get('parent', '')
+        
+        if file.filename == '':
+            return jsonify({'error': '未选择文件'}), 400
+        
+        success, result = upload_file(parent, file)
+        if not success:
+            return jsonify({'error': result}), 400
+        return jsonify(result)
+    
     # ========== 版本快照 ==========
     @app.route('/api/snapshots', methods=['GET'])
     def api_list_snapshots():
@@ -135,5 +153,4 @@ def register_http_handlers(app):
         return jsonify({'ok': True})
 
 
-# 导入 datetime 用于创建文件名
-from datetime import datetime
+

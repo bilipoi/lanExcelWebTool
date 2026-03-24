@@ -122,3 +122,27 @@ def set_readonly(rel: str, readonly: bool) -> tuple:
     save_meta(meta)
     
     return True, {'tree': build_tree()}
+
+
+def upload_file(parent: str, file_obj) -> tuple:
+    """上传文件，返回 (success, result_or_error)"""
+    if not file_obj or file_obj.filename == '':
+        return False, '未选择文件'
+    
+    # 确保文件名以 .xlsx 结尾
+    filename = file_obj.filename
+    if not filename.endswith('.xlsx'):
+        filename += '.xlsx'
+    
+    # 构建目标路径
+    filepath = safe_join(DATA_DIR, parent, filename)
+    if filepath is None:
+        return False, '非法路径'
+    
+    # 确保目录存在
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    
+    # 保存文件
+    file_obj.save(filepath)
+    
+    return True, {'path': rel_path(filepath), 'tree': build_tree()}
