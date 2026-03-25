@@ -11,8 +11,10 @@ from services.folder_service import create_folder, rename_folder, delete_folder
 from services.file_service import create_file, rename_file, move_file, delete_file, set_readonly, upload_file
 from services.snapshot_service import list_snapshots, restore_snapshot
 from services.meta_service import get_file_meta
+from services.style_service import load_styles
 from utils import safe_join
 from config import DATA_DIR
+from models.session import file_sessions
 
 
 def register_http_handlers(app):
@@ -150,6 +152,39 @@ def register_http_handlers(app):
             return jsonify({'error': '文件不存在'}), 404
         if not restore_snapshot(filepath, snap_name):
             return jsonify({'error': '快照不存在'}), 404
+        
+        # 重新加载文件数据到 session（如果存在）
+        if rel in file_sessions:
+            from openpyxl import load_workbook
+            sess = file_sessions[rel]
+            wb = load_workbook(filepath)
+            sess.spreadsheet_data = {}
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows = []
+                max_row = max(ws.max_row or 1, 50)
+                max_col = max(ws.max_column or 1, 26)
+                for r in range(1, max_row + 1):
+                    row = []
+                    for c in range(1, max_col + 1):
+                        val = ws.cell(row=r, column=c).value
+                        row.append(str(val) if val is not None else '')
+                    rows.append(row)
+                sess.spreadsheet_data[sheet_name] = rows
+            wb.close()
+            
+            # 重新加载样式
+            sess.cell_styles = load_styles(filepath)
+            
+            # 广播给所有在编辑该文件的用户
+            from flask import current_app
+            socketio = current_app.extensions['socketio']
+            socketio.emit('file_data_updated', {
+                'path': rel,
+                'sheets': sess.spreadsheet_data,
+                'cell_styles': sess.cell_styles
+            }, room=rel)
+        
         return jsonify({'ok': True})
 
 
