@@ -9,6 +9,7 @@ from typing import Dict, List
 from config import SNAP_DIR, MAX_SNAPSHOTS
 from utils import rel_path
 from .style_service import copy_styles_to_snapshot, restore_styles_from_snapshot
+from .type_service import copy_types_to_snapshot, restore_types_from_snapshot
 
 
 def snapshot_dir_for(filepath: str) -> str:
@@ -32,6 +33,9 @@ def create_snapshot(filepath: str) -> str:
     
     # Backup style file to snapshot subdirectory
     copy_styles_to_snapshot(filepath, snap_subdir)
+    
+    # Backup type file to snapshot subdirectory
+    copy_types_to_snapshot(filepath, snap_subdir)
     
     # Clean up old snapshots (remove oldest directories)
     snaps = sorted([d for d in os.listdir(snap_dir) if os.path.isdir(os.path.join(snap_dir, d))])
@@ -78,5 +82,8 @@ def restore_snapshot(filepath: str, snap_name: str) -> bool:
     
     # Restore style file
     restore_styles_from_snapshot(filepath, snap_subdir)
+    
+    # Restore type file
+    restore_types_from_snapshot(filepath, snap_subdir)
     
     return True

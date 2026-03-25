@@ -176,13 +176,18 @@ def register_http_handlers(app):
             # 重新加载样式
             sess.cell_styles = load_styles(filepath)
             
+            # 重新加载列类型
+            from services.type_service import load_types
+            sess.cell_types = load_types(filepath)
+            
             # 广播给所有在编辑该文件的用户
             from flask import current_app
             socketio = current_app.extensions['socketio']
             socketio.emit('file_data_updated', {
                 'path': rel,
                 'sheets': sess.spreadsheet_data,
-                'cell_styles': sess.cell_styles
+                'cell_styles': sess.cell_styles,
+                'cell_types': sess.cell_types
             }, room=rel)
         
         return jsonify({'ok': True})

@@ -18,7 +18,7 @@ whl_files = list(packages_dir.glob("*.whl"))
 print(f"[OK] 找到 {len(whl_files)} 个依赖包")
 
 # 创建 zip
-zip_name = "lan_excel_editor_offline_v1.0.0.zip"
+zip_name = "lan_excel_editor_offline_v1.3.0.zip"
 print(f"正在创建: {zip_name}")
 print()
 

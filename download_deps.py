@@ -24,6 +24,16 @@ FILES = [
         'url': 'https://cdn.socket.io/4.7.5/socket.io.min.js',
         'path': 'static/js/socket.io.min.js',
         'desc': 'Socket.io JS'
+    },
+    {
+        'url': 'https://cdn.quilljs.com/1.3.6/quill.min.js',
+        'path': 'static/js/quill.min.js',
+        'desc': 'Quill Rich Text Editor JS'
+    },
+    {
+        'url': 'https://cdn.quilljs.com/1.3.6/quill.snow.css',
+        'path': 'static/css/quill.snow.css',
+        'desc': 'Quill Snow Theme CSS'
     }
 ]
 

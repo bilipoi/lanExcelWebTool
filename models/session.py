@@ -12,6 +12,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from config import DATA_DIR, SNAP_DIR, USER_COLORS, MAX_SNAPSHOTS
 from utils import rel_path, calc_data_hash, get_default_data
 from services.style_service import load_styles
+from services.type_service import load_types
 
 
 class FileSession:
@@ -22,6 +23,7 @@ class FileSession:
         self.rel_path = rel_path(filepath)          # 相对路径（作为 room name）
         self.spreadsheet_data: Dict[str, List[List[str]]] = {}
         self.cell_styles: Dict[str, Any] = {}       # 单元格样式
+        self.cell_types: Dict[str, Any] = {}        # 列类型配置
         self.last_saved_hash: str = ''              # 上次保存的数据指纹
         # 用户信息：{sid: {'username': str, 'color': str, 'selection': {sheet, row, col}}}
         self.online_users: Dict[str, Dict[str, Any]] = {}
@@ -62,31 +64,41 @@ class FileSession:
         
         # 加载样式
         self.cell_styles = load_styles(self.filepath)
+        
+        # 加载列类型
+        self.cell_types = load_types(self.filepath)
     
-    def save(self) -> bool:
-        """保存到磁盘，如有变更则返回 True"""
+    def save(self) -> tuple[bool, Optional[str]]:
+        """保存到磁盘，如有变更则返回 (True, None)，否则返回 (False, None)
+        如果保存失败，返回 (False, error_message)
+        """
         current_hash = calc_data_hash(self.spreadsheet_data)
         if current_hash == self.last_saved_hash:
-            return False  # 无变更
+            return False, None  # 无变更
         
-        wb = Workbook()
-        default_sheet = wb.active
-        if default_sheet is not None:
-            wb.remove(default_sheet)
-        for sheet_name, data in self.spreadsheet_data.items():
-            ws = wb.create_sheet(title=sheet_name)
-            for r_idx, row in enumerate(data, 1):
-                for c_idx, val in enumerate(row, 1):
-                    if val and val.strip():
-                        try:
-                            ws.cell(row=r_idx, column=c_idx, value=float(val))
-                        except (ValueError, TypeError):
-                            ws.cell(row=r_idx, column=c_idx, value=val)
-        wb.save(self.filepath)
-        wb.close()
-        
-        self.last_saved_hash = current_hash
-        return True
+        try:
+            wb = Workbook()
+            default_sheet = wb.active
+            if default_sheet is not None:
+                wb.remove(default_sheet)
+            for sheet_name, data in self.spreadsheet_data.items():
+                ws = wb.create_sheet(title=sheet_name)
+                for r_idx, row in enumerate(data, 1):
+                    for c_idx, val in enumerate(row, 1):
+                        if val and val.strip():
+                            try:
+                                ws.cell(row=r_idx, column=c_idx, value=float(val))
+                            except (ValueError, TypeError):
+                                ws.cell(row=r_idx, column=c_idx, value=val)
+            wb.save(self.filepath)
+            wb.close()
+            
+            self.last_saved_hash = current_hash
+            return True, None
+        except Exception as e:
+            error_msg = str(e)
+            print(f"保存文件失败: {error_msg}")
+            return False, error_msg
     
     def _get_next_color(self) -> str:
         """获取下一个可用颜色"""

@@ -18,7 +18,14 @@ def build_tree(base: str = DATA_DIR) -> List[Dict[str, Any]]:
         entries = sorted(os.scandir(base), key=lambda e: (not e.is_dir(), e.name.lower()))
     except PermissionError:
         return result
+    # 需要隐藏的文件夹名称
+    HIDDEN_FOLDERS = {'styles', 'types'}
+
     for entry in entries:
+        # 跳过隐藏文件夹
+        if entry.is_dir() and entry.name in HIDDEN_FOLDERS:
+            continue
+
         if entry.is_dir():
             result.append({
                 'type': 'folder',

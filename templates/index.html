@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>局域网多人 Excel 编辑器</title>
   <link rel="stylesheet" href="/static/css/handsontable.full.min.css">
+  <link rel="stylesheet" href="/static/css/quill.snow.css">
   <script src="/static/js/handsontable.full.min.js"></script>
   <script src="/static/js/socket.io.min.js"></script>
+  <script src="/static/js/quill.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:'Microsoft YaHei',sans-serif;background:#f0f2f5;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
@@ -208,6 +210,16 @@
     <button class="style-btn" title="冻结行" onclick="freezeRows()" onmousedown="event.preventDefault()">❄️行</button>
     <button class="style-btn" title="冻结列" onclick="freezeCols()" onmousedown="event.preventDefault()">❄️列</button>
   </div>
+  <div class="style-group" style="position:relative;">
+    <select class="font-size-select" id="cell-type-select" onchange="handleCellTypeChange(this.value)" style="width:100px;">
+      <option value="">单元格类型</option>
+      <option value="text">📄 文本</option>
+      <option value="date">📅 日期</option>
+      <option value="progress">📊 进度条</option>
+      <option value="dropdown">📋 下拉列表</option>
+      <option value="rich-text">📝 富文本</option>
+    </select>
+  </div>
   <div class="style-group">
     <button class="style-btn" title="创建文件链接" onclick="openHyperlinkModal()" onmousedown="event.preventDefault()" style="width:auto;padding:0 8px;"
 >🔗 链接</button>
@@ -375,6 +387,49 @@
   </div>
 </div>
 
+<!-- 下拉列表配置模态框 -->
+<div class="modal-overlay" id="dropdown-config-modal">
+  <div class="modal">
+    <h2>配置下拉列表</h2>
+    <p style="font-size:12px;color:#666;margin-bottom:10px;">每行输入一个选项</p>
+    <textarea id="dropdown-options" rows="8" style="width:100%;resize:vertical;font-family:monospace;font-size:13px;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;" placeholder="选项1&#10;选项2&#10;选项3"></textarea>
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeDropdownConfigModal()">取消</button>
+      <button class="btn green" onclick="applyDropdownConfig()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 富文本配置模态框 -->
+<div class="modal-overlay" id="rich-text-config-modal">
+  <div class="modal">
+    <h2>配置富文本按钮</h2>
+    <p style="font-size:12px;color:#666;margin-bottom:10px;">设置单元格上显示的按钮文字</p>
+    <div style="margin-bottom:15px;">
+      <label style="font-size:13px;color:#333;display:block;margin-bottom:5px;">按钮文字：</label>
+      <input type="text" id="rich-text-button-label" placeholder="📝 编辑内容" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;" value="📝 编辑内容">
+    </div>
+    <p style="font-size:11px;color:#999;margin-bottom:10px;">提示：可以使用表情符号让按钮更醒目</p>
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeRichTextConfigModal()">取消</button>
+      <button class="btn green" onclick="applyRichTextConfig()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 富文本编辑器模态框 -->
+<div class="modal-overlay" id="rich-text-modal" style="z-index:2000;">
+  <div class="modal" style="width:800px;max-width:90%;max-height:90vh;display:flex;flex-direction:column;">
+    <h2>富文本编辑器</h2>
+    <p style="font-size:12px;color:#666;margin-bottom:10px;">支持文字样式、列表、链接、图片等</p>
+    <div id="rich-text-editor" style="flex:1;min-height:300px;border:1px solid #ddd;border-radius:4px;margin-bottom:15px;background:#fff;"></div>
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeRichTextEditor()">取消</button>
+      <button class="btn green" onclick="saveRichTextContent()">保存</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ==================== 全局变量 ====================
 var socket = io();
@@ -404,6 +459,10 @@ Object.defineProperty(window, 'currentReadonly', {
 Object.defineProperty(window, 'cellStyles', {
   get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.cellStyles || {} : {}; },
   set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].cellStyles = val; }
+});
+Object.defineProperty(window, 'cellTypes', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.cellTypes || {} : {}; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].cellTypes = val; }
 });
 Object.defineProperty(window, 'myUserColor', {
   get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.myColor || '' : ''; },
@@ -492,6 +551,7 @@ function openFileTab(filePath, data) {
     sheetsData: data.sheets || {},
     currentSheet: Object.keys(data.sheets || {})[0],
     cellStyles: data.cell_styles || {},
+    cellTypes: data.cell_types || {},
     readonly: data.readonly || false,
     myColor: data.my_color || '',
     otherUsers: {},
@@ -773,9 +833,17 @@ function redo() {
 // ==================== 格式刷功能 ====================
 var formatPainterSource = null;  // 格式刷源单元格 {row, col}
 var formatPainterActive = false;
+var formatPainterContinuous = false;  // 连续模式（类似Excel双击格式刷）
+var formatPainterShiftHeld = false;   // Shift键状态跟踪
 
-function toggleFormatPainter() {
+function toggleFormatPainter(forceContinuous = false) {
   if (currentReadonly || !hot) return;
+  
+  if (formatPainterActive) {
+    // 取消格式刷模式
+    exitFormatPainter();
+    return;
+  }
   
   const selected = getSelectedCells();
   if (selected.length === 0) {
@@ -783,24 +851,39 @@ function toggleFormatPainter() {
     return;
   }
   
-  if (formatPainterActive) {
-    // 取消格式刷模式
-    formatPainterActive = false;
-    formatPainterSource = null;
-    document.getElementById('btn-format-painter').classList.remove('active');
-    setSaveStatus('格式刷已取消');
-    document.body.style.cursor = 'default';
+  // 进入格式刷模式
+  formatPainterSource = selected[0];  // 使用第一个选中的单元格作为源
+  formatPainterActive = true;
+  formatPainterContinuous = forceContinuous;
+  
+  document.getElementById('btn-format-painter').classList.add('active');
+  
+  if (formatPainterContinuous) {
+    setSaveStatus('连续格式刷已激活，可多次应用格式，按ESC退出');
   } else {
-    // 进入格式刷模式
-    formatPainterSource = selected[0];  // 使用第一个选中的单元格作为源
-    formatPainterActive = true;
-    document.getElementById('btn-format-painter').classList.add('active');
-    setSaveStatus('格式刷已激活，点击目标单元格应用格式');
-    document.body.style.cursor = 'copy';
+    setSaveStatus('格式刷已激活，点击目标单元格应用格式（按Shift连续刷）');
   }
+  
+  document.body.style.cursor = 'copy';
 }
 
-function applyFormatPainter(targetRow, targetCol) {
+// 双击格式刷按钮进入连续模式
+document.getElementById('btn-format-painter').addEventListener('dblclick', function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  toggleFormatPainter(true);  // true = 连续模式
+});
+
+function exitFormatPainter() {
+  formatPainterActive = false;
+  formatPainterContinuous = false;
+  formatPainterSource = null;
+  document.getElementById('btn-format-painter').classList.remove('active');
+  setSaveStatus('格式刷已退出');
+  document.body.style.cursor = 'default';
+}
+
+function applyFormatPainter(targetRow, targetCol, isShiftHeld = false) {
   if (!formatPainterActive || !formatPainterSource || !currentSheet) return;
   
   const sourceRow = formatPainterSource.row;
@@ -809,32 +892,49 @@ function applyFormatPainter(targetRow, targetCol) {
   // 获取源单元格样式
   const sourceStyle = cellStyles[currentSheet]?.[sourceRow]?.[sourceCol] || {};
   
-  if (Object.keys(sourceStyle).length === 0) {
-    setSaveStatus('源单元格没有格式', '#e67e22');
-    return;
-  }
-  
-  // 应用到目标单元格
+  // 初始化cellStyles结构
   if (!cellStyles[currentSheet]) cellStyles[currentSheet] = {};
   if (!cellStyles[currentSheet][targetRow]) cellStyles[currentSheet][targetRow] = {};
-  cellStyles[currentSheet][targetRow][targetCol] = { ...sourceStyle };
   
-  // 广播样式变更
-  Object.entries(sourceStyle).forEach(([styleType, value]) => {
-    socket.emit('cell_style_change', {
-      sheet: currentSheet,
-      row: targetRow,
-      col: targetCol,
-      style_type: styleType,
-      value: value
+  if (Object.keys(sourceStyle).length === 0) {
+    // 源单元格没有格式，清除目标单元格格式
+    if (cellStyles[currentSheet][targetRow][targetCol]) {
+      delete cellStyles[currentSheet][targetRow][targetCol];
+      // 广播清除所有样式
+      socket.emit('cell_style_change', {
+        sheet: currentSheet,
+        row: targetRow,
+        col: targetCol,
+        style_type: 'clear_all',
+        value: true
+      });
+    }
+  } else {
+    // 源单元格有格式，复制到目标单元格
+    cellStyles[currentSheet][targetRow][targetCol] = { ...sourceStyle };
+    
+    // 广播样式变更
+    Object.entries(sourceStyle).forEach(([styleType, value]) => {
+      socket.emit('cell_style_change', {
+        sheet: currentSheet,
+        row: targetRow,
+        col: targetCol,
+        style_type: styleType,
+        value: value
+      });
     });
-  });
+  }
   
+  // 重新渲染表格以显示新样式
   hot.render();
-  setSaveStatus('格式已应用');
   
-  // 可选：应用后自动退出格式刷模式（单次模式）
-  // toggleFormatPainter();
+  // 如果是连续模式或按住Shift键，保持格式刷激活
+  if (!formatPainterContinuous && !isShiftHeld) {
+    exitFormatPainter();
+    setSaveStatus(Object.keys(sourceStyle).length === 0 ? '格式已清除' : '格式已应用');
+  } else {
+    setSaveStatus(Object.keys(sourceStyle).length === 0 ? '格式已清除（继续选择或按ESC退出）' : '格式已应用（继续选择或按ESC退出）');
+  }
 }
 
 // ==================== 冻结行列功能 ====================
@@ -1046,6 +1146,24 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault();
     applyStyle('underline');
   }
+  
+  // ESC: 退出格式刷
+  if (e.key === 'Escape' && formatPainterActive) {
+    e.preventDefault();
+    exitFormatPainter();
+  }
+  
+  // 跟踪Shift键状态（用于格式刷）
+  if (e.key === 'Shift') {
+    formatPainterShiftHeld = true;
+  }
+});
+
+// 跟踪Shift键释放（用于格式刷）
+document.addEventListener('keyup', function(e) {
+  if (e.key === 'Shift') {
+    formatPainterShiftHeld = false;
+  }
 });
 
 // Enter键在查找框中触发查找
@@ -1212,8 +1330,400 @@ function styledCellRenderer(instance, td, row, col, prop, value, cellProperties)
   }
 }
 
+// ==================== 单元格类型功能 ====================
+// 支持的单元格类型: 'text', 'date', 'progress', 'dropdown', 'rich-text'
+
+function getCellType(row, col) {
+  // 返回指定单元格的类型配置
+  if (!currentSheet) return { type: 'text' };
+  return cellTypes[currentSheet]?.[row]?.[col] || { type: 'text' };
+}
+
+function setCellType(row, col, typeConfig) {
+  // 设置单元格类型
+  if (currentReadonly || !currentSheet) return;
+
+  if (!cellTypes[currentSheet]) cellTypes[currentSheet] = {};
+  if (!cellTypes[currentSheet][row]) cellTypes[currentSheet][row] = {};
+  cellTypes[currentSheet][row][col] = typeConfig;
+
+  // 广播单元格类型变更
+  socket.emit('cell_type_change', {
+    sheet: currentSheet,
+    row: row,
+    col: col,
+    type_config: typeConfig
+  });
+
+  // 更新表格设置以刷新编辑器类型
+  if (hot) {
+    hot.updateSettings({
+      cells: createCellsCallback()
+    });
+    hot.render();
+  }
+  setSaveStatus('单元格类型已设置: ' + typeConfig.type);
+}
+
+function setCellTypesForSelection(type, typeConfig = {}) {
+  // 为选中的所有单元格设置类型
+  if (currentReadonly || !currentSheet) return;
+  
+  const selection = getSelectedCells();
+  if (selection.length === 0) {
+    setSaveStatus('请先选择单元格', '#e67e22');
+    return;
+  }
+  
+  const fullConfig = { type, ...typeConfig };
+  
+  selection.forEach(cell => {
+    if (!cellTypes[currentSheet]) cellTypes[currentSheet] = {};
+    if (!cellTypes[currentSheet][cell.row]) cellTypes[currentSheet][cell.row] = {};
+    cellTypes[currentSheet][cell.row][cell.col] = fullConfig;
+    
+    // 广播每个单元格的类型变更
+    socket.emit('cell_type_change', {
+      sheet: currentSheet,
+      row: cell.row,
+      col: cell.col,
+      type_config: fullConfig
+    });
+  });
+  
+  // 更新表格设置并重新渲染
+  if (hot) {
+    hot.updateSettings({
+      cells: createCellsCallback()
+    });
+    hot.render();
+  }
+  setSaveStatus(`已为 ${selection.length} 个单元格设置类型: ${type}`);
+}
+
+function clearCellType(row, col) {
+  // 清除单元格类型（恢复为文本）
+  if (currentReadonly || !currentSheet) return;
+  
+  if (cellTypes[currentSheet]?.[row]?.[col]) {
+    delete cellTypes[currentSheet][row][col];
+    
+    // 如果该行没有类型了，删除行对象
+    if (Object.keys(cellTypes[currentSheet][row]).length === 0) {
+      delete cellTypes[currentSheet][row];
+    }
+    
+    socket.emit('cell_type_change', {
+      sheet: currentSheet,
+      row: row,
+      col: col,
+      type_config: { type: 'text' }
+    });
+
+    // 更新表格设置并重新渲染
+    if (hot) {
+      hot.updateSettings({
+        cells: createCellsCallback()
+      });
+      hot.render();
+    }
+    setSaveStatus('单元格类型已清除');
+  }
+}
+
+function clearCellTypesForSelection() {
+  // 清除选中单元格的类型
+  if (currentReadonly || !currentSheet) return;
+  
+  const selection = getSelectedCells();
+  if (selection.length === 0) return;
+  
+  selection.forEach(cell => {
+    if (cellTypes[currentSheet]?.[cell.row]?.[cell.col]) {
+      delete cellTypes[currentSheet][cell.row][cell.col];
+      
+      if (Object.keys(cellTypes[currentSheet][cell.row]).length === 0) {
+        delete cellTypes[currentSheet][cell.row];
+      }
+      
+      socket.emit('cell_type_change', {
+        sheet: currentSheet,
+        row: cell.row,
+        col: cell.col,
+        type_config: { type: 'text' }
+      });
+    }
+  });
+
+  // 更新表格设置并重新渲染
+  if (hot) {
+    hot.updateSettings({
+      cells: createCellsCallback()
+    });
+    hot.render();
+  }
+  setSaveStatus(`已清除 ${selection.length} 个单元格的类型`);
+}
+
+// 处理单元格类型选择
+var dropdownConfigCells = null;
+
+function handleCellTypeChange(type) {
+  if (!type || !currentSheet) return;
+  
+  if (type === 'dropdown') {
+    const selection = getSelectedCells();
+    if (selection.length === 0) {
+      setSaveStatus('请先选择单元格', '#e67e22');
+      document.getElementById('cell-type-select').value = '';
+      return;
+    }
+    dropdownConfigCells = selection;
+    openDropdownConfigModal();
+  } else if (type === 'date') {
+    setCellTypesForSelection('date', { format: 'YYYY-MM-DD' });
+    document.getElementById('cell-type-select').value = '';
+  } else if (type === 'progress') {
+    setCellTypesForSelection('progress');
+    document.getElementById('cell-type-select').value = '';
+  } else if (type === 'text') {
+    clearCellTypesForSelection();
+    document.getElementById('cell-type-select').value = '';
+  } else if (type === 'rich-text') {
+    const selection = getSelectedCells();
+    if (selection.length === 0) {
+      setSaveStatus('请先选择单元格', '#e67e22');
+      document.getElementById('cell-type-select').value = '';
+      return;
+    }
+    richTextConfigCells = selection;
+    openRichTextConfigModal();
+  }
+}
+
+// ==================== 富文本编辑器功能 ====================
+var richTextEditor = null;
+var richTextCurrentCell = null;
+var richTextConfigCells = null;
+
+// 打开富文本配置模态框
+function openRichTextConfigModal() {
+  const modal = document.getElementById('rich-text-config-modal');
+  document.getElementById('rich-text-button-label').value = '📝 编辑内容';
+  modal.classList.add('show');
+}
+
+function closeRichTextConfigModal() {
+  document.getElementById('rich-text-config-modal').classList.remove('show');
+  richTextConfigCells = null;
+  document.getElementById('cell-type-select').value = '';
+}
+
+function applyRichTextConfig() {
+  if (!richTextConfigCells || richTextConfigCells.length === 0) {
+    closeRichTextConfigModal();
+    return;
+  }
+
+  const buttonText = document.getElementById('rich-text-button-label').value.trim() || '📝 编辑内容';
+
+  setCellTypesForSelection('rich-text', { buttonText: buttonText });
+  closeRichTextConfigModal();
+}
+
+function openRichTextEditor(row, col, content) {
+  if (currentReadonly) {
+    setSaveStatus('文件为只读，无法编辑', '#e67e22');
+    return;
+  }
+
+  richTextCurrentCell = { row, col };
+  const modal = document.getElementById('rich-text-modal');
+
+  // 显示模态框
+  modal.classList.add('show');
+
+  // 初始化或重置 Quill 编辑器
+  if (!richTextEditor) {
+    richTextEditor = new Quill('#rich-text-editor', {
+      theme: 'snow',
+      placeholder: '在此输入富文本内容...',
+      modules: {
+        toolbar: [
+          [{ 'header': [1, 2, 3, false] }],
+          ['bold', 'italic', 'underline', 'strike'],
+          [{ 'color': [] }, { 'background': [] }],
+          [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+          [{ 'align': [] }],
+          ['link', 'image'],
+          ['clean']
+        ]
+      }
+    });
+
+    // 自定义图片处理 - 将粘贴的图片转为 base64
+    richTextEditor.root.addEventListener('paste', function(e) {
+      const items = e.clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          e.preventDefault();
+          const blob = items[i].getAsFile();
+          const reader = new FileReader();
+          reader.onload = function(event) {
+            const range = richTextEditor.getSelection();
+            richTextEditor.insertEmbed(range ? range.index : 0, 'image', event.target.result);
+          };
+          reader.readAsDataURL(blob);
+          return;
+        }
+      }
+    });
+  }
+
+  // 设置内容
+  richTextEditor.root.innerHTML = content || '';
+  richTextEditor.focus();
+}
+
+function closeRichTextEditor() {
+  document.getElementById('rich-text-modal').classList.remove('show');
+  richTextCurrentCell = null;
+}
+
+function saveRichTextContent() {
+  if (!richTextCurrentCell || !hot) {
+    console.error('saveRichTextContent: richTextCurrentCell or hot is null');
+    setSaveStatus('保存失败：编辑器未初始化', '#e74c3c');
+    return;
+  }
+  
+  if (!currentSheet) {
+    console.error('saveRichTextContent: currentSheet is null');
+    setSaveStatus('保存失败：未选择工作表', '#e74c3c');
+    return;
+  }
+
+  const { row, col } = richTextCurrentCell;
+  let content = richTextEditor.root.innerHTML;
+
+  // 检查是否有 blob URL 的图片（无法保存）
+  if (content.includes('blob:')) {
+    // 尝试将 blob URL 转换为 base64
+    convertBlobImagesToBase64(content).then(convertedContent => {
+      // 保存到表格数据
+      hot.setDataAtCell(row, col, convertedContent);
+
+      // 同步到其他用户
+      socket.emit('cell_edit', {
+        sheet: currentSheet,
+        row: row,
+        col: col,
+        value: convertedContent
+      });
+
+      closeRichTextEditor();
+      setSaveStatus('富文本内容已保存（包含图片）');
+    }).catch(err => {
+      console.error('转换图片失败:', err);
+      // 仍然保存，但可能不包含某些图片
+      hot.setDataAtCell(row, col, content);
+      socket.emit('cell_edit', {
+        sheet: currentSheet,
+        row: row,
+        col: col,
+        value: content
+      });
+      closeRichTextEditor();
+      setSaveStatus('富文本内容已保存（部分图片可能未保存）', '#e67e22');
+    });
+  } else {
+    // 保存到表格数据
+    hot.setDataAtCell(row, col, content);
+
+    // 同步到其他用户
+    socket.emit('cell_edit', {
+      sheet: currentSheet,
+      row: row,
+      col: col,
+      value: content
+    });
+
+    closeRichTextEditor();
+    setSaveStatus('富文本内容已保存');
+  }
+}
+
+// 将 blob URL 图片转换为 base64
+async function convertBlobImagesToBase64(html) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const images = doc.querySelectorAll('img');
+
+  for (let img of images) {
+    const src = img.getAttribute('src');
+    if (src && src.startsWith('blob:')) {
+      try {
+        const response = await fetch(src);
+        const blob = await response.blob();
+        const base64 = await blobToBase64(blob);
+        img.setAttribute('src', base64);
+      } catch (e) {
+        console.error('转换 blob URL 失败:', e);
+      }
+    }
+  }
+
+  return doc.body.innerHTML;
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// 下拉列表配置模态框
+function openDropdownConfigModal() {
+  const modal = document.getElementById('dropdown-config-modal');
+  document.getElementById('dropdown-options').value = '';
+  modal.classList.add('show');
+}
+
+function closeDropdownConfigModal() {
+  document.getElementById('dropdown-config-modal').classList.remove('show');
+  dropdownConfigCells = null;
+  document.getElementById('cell-type-select').value = '';
+}
+
+function applyDropdownConfig() {
+  if (!dropdownConfigCells || dropdownConfigCells.length === 0) {
+    closeDropdownConfigModal();
+    return;
+  }
+  
+  const optionsText = document.getElementById('dropdown-options').value.trim();
+  const options = optionsText.split('\n').map(opt => opt.trim()).filter(opt => opt);
+  
+  if (options.length === 0) {
+    setSaveStatus('请至少输入一个选项', '#e67e22');
+    return;
+  }
+  
+  setCellTypesForSelection('dropdown', { options, strict: true });
+  closeDropdownConfigModal();
+}
+
 // ==================== Socket事件 ====================
-socket.on('connect', () => { loadTree(); });
+socket.on('connect', () => {
+  loadTree();
+  // 重新连接后，重新加入当前打开的文件
+  if (activeFilePath && myUsername) {
+    socket.emit('join_file', { path: activeFilePath, username: myUsername });
+  }
+});
 
 socket.on('file_opened', data => {
   // 使用多页签系统打开文件
@@ -1260,6 +1770,31 @@ socket.on('cell_style_updated', data => {
   }
   
   if (sheet === currentSheet && hot) {
+    hot.render();
+  }
+});
+
+// 单元格类型更新事件
+socket.on('cell_type_updated', data => {
+  const { sheet, row, col, type_config } = data;
+  if (!cellTypes[sheet]) cellTypes[sheet] = {};
+  if (!cellTypes[sheet][row]) cellTypes[sheet][row] = {};
+
+  if (type_config.type === 'text') {
+    delete cellTypes[sheet][row][col];
+    // 如果该行没有类型了，删除行对象
+    if (Object.keys(cellTypes[sheet][row]).length === 0) {
+      delete cellTypes[sheet][row];
+    }
+  } else {
+    cellTypes[sheet][row][col] = type_config;
+  }
+
+  // 如果是当前工作表，更新表格设置并重新渲染
+  if (sheet === currentSheet && hot) {
+    hot.updateSettings({
+      cells: createCellsCallback()
+    });
     hot.render();
   }
 });
@@ -1316,6 +1851,7 @@ socket.on('file_data_updated', data => {
   if (data.path === currentFilePath) {
     sheetsData = data.sheets;
     cellStyles = data.cell_styles || {};
+    cellTypes = data.cell_types || {};
     currentSheet = Object.keys(sheetsData)[0];
     renderTabs();
     initTable(sheetsData[currentSheet]);
@@ -1340,6 +1876,7 @@ function resetEditor() {
   if (hot) { hot.destroy(); hot = null; }
   sheetsData = {};
   cellStyles = {};
+  cellTypes = {};
   currentSheet = null;
   currentFilePath = null;
   currentReadonly = false;
@@ -1361,6 +1898,118 @@ function resetEditor() {
 }
 
 // ==================== 表格初始化 ====================
+// 创建 cells 回调函数
+function createCellsCallback() {
+  return function(row, col) {
+    // 根据单元格类型返回对应的编辑器配置
+    const typeConfig = getCellType(row, col);
+    const cellProperties = {};
+
+    switch (typeConfig.type) {
+      case 'date':
+        cellProperties.type = 'date';
+        cellProperties.dateFormat = typeConfig.format || 'YYYY-MM-DD';
+        cellProperties.correctFormat = true;
+        break;
+
+      case 'dropdown':
+        cellProperties.type = 'dropdown';
+        cellProperties.source = typeConfig.options || [];
+        cellProperties.strict = typeConfig.strict !== false;
+        cellProperties.allowInvalid = false;
+        break;
+
+      case 'rich-text':
+        // 富文本类型使用自定义编辑器，禁用默认编辑
+        cellProperties.editor = false;
+        cellProperties.readOnly = true;
+        break;
+
+      default:
+        // 默认文本编辑器
+        cellProperties.editor = 'text';
+        break;
+    }
+
+    return cellProperties;
+  };
+}
+
+// 自定义单元格渲染器 - 支持不同类型的单元格
+function customCellRenderer(instance, td, row, col, prop, value, cellProperties) {
+  const typeConfig = getCellType(row, col);
+  
+  switch (typeConfig.type) {
+    case 'date':
+      // 使用 Handsontable 内置的日期渲染器
+      Handsontable.renderers.DateRenderer(instance, td, row, col, prop, value, cellProperties);
+      break;
+      
+    case 'progress':
+      // 进度条渲染器
+      Handsontable.renderers.TextRenderer(instance, td, row, col, prop, value, cellProperties);
+      
+      // 解析进度值 (0-100)
+      let progress = parseFloat(value) || 0;
+      progress = Math.max(0, Math.min(100, progress));
+      
+      // 创建进度条
+      td.innerHTML = '';
+      const container = document.createElement('div');
+      container.style.cssText = 'width:100%;height:20px;background:#e0e0e0;border-radius:3px;position:relative;overflow:hidden;';
+      
+      const bar = document.createElement('div');
+      bar.style.cssText = `width:${progress}%;height:100%;background:linear-gradient(90deg,#4caf50,#8bc34a);transition:width 0.3s;`;
+      
+      const text = document.createElement('span');
+      text.textContent = progress + '%';
+      text.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:12px;color:#333;font-weight:bold;';
+      
+      container.appendChild(bar);
+      container.appendChild(text);
+      td.appendChild(container);
+      break;
+      
+    case 'dropdown':
+      // 下拉列表使用默认渲染器
+      Handsontable.renderers.DropdownRenderer(instance, td, row, col, prop, value, cellProperties);
+      break;
+
+    case 'rich-text':
+      // 富文本渲染器 - 显示为按钮
+      td.innerHTML = '';
+      const btn = document.createElement('button');
+      // 获取自定义按钮文字，如果没有则使用默认值
+      const buttonText = typeConfig.buttonText || '📝 编辑内容';
+      btn.textContent = buttonText;
+      btn.style.cssText = 'width:100%;padding:4px 8px;background:#2196f3;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      btn.onclick = function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openRichTextEditor(row, col, value || '');
+      };
+      td.appendChild(btn);
+      break;
+
+    default:
+      // 默认使用带样式的文本渲染器（包含超链接支持）
+      styledCellRenderer(instance, td, row, col, prop, value, cellProperties);
+      return;
+  }
+  
+  // 应用样式（对所有类型）
+  if (currentSheet && cellStyles[currentSheet]) {
+    const style = cellStyles[currentSheet][row]?.[col] || {};
+    if (style.bold) td.style.fontWeight = 'bold';
+    if (style.italic) td.style.fontStyle = 'italic';
+    if (style.underline) td.style.textDecoration = 'underline';
+    if (style.fontSize) td.style.fontSize = style.fontSize + 'px';
+    if (style.color) td.style.color = style.color;
+    if (style.bgColor) td.style.backgroundColor = style.bgColor;
+    if (style.align) td.style.textAlign = style.align;
+  }
+}
+
 function initTable(data) {
   const container = document.getElementById('hot-container');
   if (hot) { hot.destroy(); hot = null; }
@@ -1369,6 +2018,8 @@ function initTable(data) {
     data: deepCopy(data),
     rowHeaders: true,
     colHeaders: true,
+    renderer: customCellRenderer,
+    cells: createCellsCallback(),
     contextMenu: true,
     manualColumnResize: true,
     manualRowResize: true,
@@ -1376,7 +2027,6 @@ function initTable(data) {
     width: '100%', height: '100%',
     stretchH: 'all',
     readOnly: currentReadonly,
-    renderer: styledCellRenderer,
     licenseKey: 'non-commercial-and-evaluation',
     // 启用撤销/重做
     undo: true,
@@ -1392,11 +2042,13 @@ function initTable(data) {
         // 应用格式刷到选中的单元格
         for (let r = Math.min(row, row2); r <= Math.max(row, row2); r++) {
           for (let c = Math.min(col, col2); c <= Math.max(col, col2); c++) {
-            applyFormatPainter(r, c);
+            applyFormatPainter(r, c, formatPainterShiftHeld);
           }
         }
-        // 应用后退出格式刷模式
-        toggleFormatPainter();
+        // 只有在非连续模式且未按住Shift时才退出格式刷模式
+        if (!formatPainterContinuous && !formatPainterShiftHeld) {
+          exitFormatPainter();
+        }
         return;
       }
       
@@ -1511,6 +2163,39 @@ function saveFile() {
     setSaveStatus('只读文件无法保存', '#e67e22');
     return;
   }
+  
+  // 检查是否有超大单元格内容（base64图片可能导致）
+  const MAX_CELL_SIZE = 30000; // Excel单元格大约限制32,767字符，留一些余量
+  let oversizedCells = [];
+  
+  for (let sheetName in sheetsData) {
+    let sheet = sheetsData[sheetName];
+    for (let r = 0; r < sheet.length; r++) {
+      for (let c = 0; c < sheet[r].length; c++) {
+        let val = sheet[r][c];
+        if (val && val.length > MAX_CELL_SIZE) {
+          oversizedCells.push({sheet: sheetName, row: r, col: c, size: val.length});
+        }
+      }
+    }
+  }
+  
+  if (oversizedCells.length > 0) {
+    let confirmMsg = `检测到 ${oversizedCells.length} 个单元格内容过大（可能包含大图片）：\n\n`;
+    oversizedCells.slice(0, 3).forEach(cell => {
+      confirmMsg += `- ${cell.sheet} [${cell.row + 1}, ${String.fromCharCode(65 + cell.col)}] (${(cell.size / 1024).toFixed(1)} KB)\n`;
+    });
+    if (oversizedCells.length > 3) {
+      confirmMsg += `- ... 还有 ${oversizedCells.length - 3} 个\n`;
+    }
+    confirmMsg += '\n继续保存可能导致这些单元格内容丢失或文件损坏。\n是否继续？';
+    
+    if (!confirm(confirmMsg)) {
+      setSaveStatus('保存已取消', '#e67e22');
+      return;
+    }
+  }
+  
   // 发送保存请求时包含当前文件路径
   socket.emit('save_file', { path: activeFilePath });
 }

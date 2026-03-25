@@ -82,6 +82,7 @@ def register_websocket_handlers(socketio):
             'filename': os.path.basename(filepath),
             'sheets': sess.spreadsheet_data,
             'cell_styles': sess.cell_styles,
+            'cell_types': sess.cell_types,
             'readonly': sess.readonly,
             'users': sess.get_user_list(),
             'my_color': user_color,
@@ -214,14 +215,20 @@ def register_websocket_handlers(socketio):
         }, room=rel, broadcast=True, include_self=False)
     
     @socketio.on('save_file')
-    def handle_save_file():
+    def handle_save_file(data=None):
         """手动保存"""
         sid = request.sid
-        if sid not in user_current_file:
+        
+        # 尝试从 user_current_file 获取，或使用前端传来的 path
+        if sid in user_current_file:
+            rel = user_current_file[sid]
+        elif data and data.get('path'):
+            rel = data.get('path')
+            # 重新记录用户当前文件
+            user_current_file[sid] = rel
+        else:
             emit('save_result', {'ok': False, 'error': '没有打开的文件'})
             return
-        
-        rel = user_current_file[sid]
         if rel not in file_sessions:
             emit('save_result', {'ok': False, 'error': '会话不存在'})
             return
@@ -232,8 +239,10 @@ def register_websocket_handlers(socketio):
             emit('save_result', {'ok': False, 'error': '文件为只读'})
             return
         
-        changed = sess.save()
-        if changed:
+        changed, error_msg = sess.save()
+        if error_msg:
+            emit('save_result', {'ok': False, 'error': f'保存失败: {error_msg}'})
+        elif changed:
             create_snapshot(sess.filepath)
             emit('save_result', {'ok': True, 'saved': True, 'message': '已保存'})
             # 通知同一文件的其他用户
@@ -273,12 +282,21 @@ def register_websocket_handlers(socketio):
         # 更新样式数据
         if sheet not in sess.cell_styles:
             sess.cell_styles[sheet] = {}
-        if str(row) not in sess.cell_styles[sheet]:
-            sess.cell_styles[sheet][str(row)] = {}
-        if str(col) not in sess.cell_styles[sheet][str(row)]:
-            sess.cell_styles[sheet][str(row)][str(col)] = {}
         
-        sess.cell_styles[sheet][str(row)][str(col)][style_type] = value
+        # 处理清除所有样式
+        if style_type == 'clear_all':
+            if str(row) in sess.cell_styles.get(sheet, {}) and str(col) in sess.cell_styles[sheet][str(row)]:
+                del sess.cell_styles[sheet][str(row)][str(col)]
+                # 如果该行的样式为空，删除该行
+                if not sess.cell_styles[sheet][str(row)]:
+                    del sess.cell_styles[sheet][str(row)]
+        else:
+            if str(row) not in sess.cell_styles[sheet]:
+                sess.cell_styles[sheet][str(row)] = {}
+            if str(col) not in sess.cell_styles[sheet][str(row)]:
+                sess.cell_styles[sheet][str(row)][str(col)] = {}
+            
+            sess.cell_styles[sheet][str(row)][str(col)][style_type] = value
         
         # 保存到磁盘
         save_styles(sess.filepath, sess.cell_styles)
@@ -292,3 +310,62 @@ def register_websocket_handlers(socketio):
             'value': value,
             'username': username
         }, room=rel, broadcast=True, include_self=False)
+    
+    @socketio.on('cell_type_change')
+    def handle_cell_type_change(data):
+        """处理单元格类型变更"""
+        sid = request.sid
+        
+        # 检查用户是否在编辑文件
+        if sid not in user_current_file:
+            return
+        
+        rel = user_current_file[sid]
+        if rel not in file_sessions:
+            return
+        
+        sess = file_sessions[rel]
+        
+        # 只读检查
+        if sess.readonly:
+            emit('error', {'message': '文件为只读，无法修改单元格类型'})
+            return
+        
+        sheet = data.get('sheet', 'Sheet1')
+        row = int(data.get('row', 0))
+        col = int(data.get('col', 0))
+        type_config = data.get('type_config', {'type': 'text'})
+        
+        user_info = sess.online_users.get(sid)
+        username = user_info['username'] if user_info else '未知'
+        
+        # 更新单元格类型数据
+        if sheet not in sess.cell_types:
+            sess.cell_types[sheet] = {}
+        if str(row) not in sess.cell_types[sheet]:
+            sess.cell_types[sheet][str(row)] = {}
+        
+        if type_config.get('type') == 'text':
+            # 恢复为文本类型，删除配置
+            if str(col) in sess.cell_types.get(sheet, {}).get(str(row), {}):
+                del sess.cell_types[sheet][str(row)][str(col)]
+                # 如果该行没有类型了，删除行对象
+                if not sess.cell_types[sheet][str(row)]:
+                    del sess.cell_types[sheet][str(row)]
+        else:
+            sess.cell_types[sheet][str(row)][str(col)] = type_config
+        
+        # 保存到磁盘
+        from services.type_service import save_types
+        save_types(sess.filepath, sess.cell_types)
+        
+        # 广播给同一文件的其他用户
+        emit('cell_type_updated', {
+            'sheet': sheet,
+            'row': row,
+            'col': col,
+            'type_config': type_config,
+            'username': username
+        }, room=rel, broadcast=True, include_self=False)
+
+

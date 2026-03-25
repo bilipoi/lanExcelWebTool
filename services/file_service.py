@@ -105,6 +105,10 @@ def delete_file(rel: str) -> tuple:
     # 删除样式文件
     delete_styles(filepath)
     
+    # 删除类型文件
+    from services.type_service import delete_types
+    delete_types(filepath)
+    
     return True, {'tree': build_tree()}
 
 
