@@ -201,7 +201,12 @@
     <button class="style-btn" id="btn-align-right" title="右对齐" onclick="applyStyle('align', 'right')" onmousedown="event.preventDefault()">➡</button>
   </div>
   <div class="style-group">
+    <button class="style-btn" id="btn-format-painter" title="格式刷" onclick="toggleFormatPainter()" onmousedown="event.preventDefault()" style="font-size:14px;">🖌️</button>
     <button class="style-btn" onclick="clearCellStyle()" title="清除格式" style="width:auto;padding:0 8px;" onmousedown="event.preventDefault()">✕ 清除</button>
+  </div>
+  <div class="style-group">
+    <button class="style-btn" title="冻结行" onclick="freezeRows()" onmousedown="event.preventDefault()">❄️行</button>
+    <button class="style-btn" title="冻结列" onclick="freezeCols()" onmousedown="event.preventDefault()">❄️列</button>
   </div>
   <div class="style-group">
     <button class="style-btn" title="创建文件链接" onclick="openHyperlinkModal()" onmousedown="event.preventDefault()" style="width:auto;padding:0 8px;"
@@ -765,6 +770,121 @@ function redo() {
   }
 }
 
+// ==================== 格式刷功能 ====================
+var formatPainterSource = null;  // 格式刷源单元格 {row, col}
+var formatPainterActive = false;
+
+function toggleFormatPainter() {
+  if (currentReadonly || !hot) return;
+  
+  const selected = getSelectedCells();
+  if (selected.length === 0) {
+    setSaveStatus('请先选择源单元格', '#e67e22');
+    return;
+  }
+  
+  if (formatPainterActive) {
+    // 取消格式刷模式
+    formatPainterActive = false;
+    formatPainterSource = null;
+    document.getElementById('btn-format-painter').classList.remove('active');
+    setSaveStatus('格式刷已取消');
+    document.body.style.cursor = 'default';
+  } else {
+    // 进入格式刷模式
+    formatPainterSource = selected[0];  // 使用第一个选中的单元格作为源
+    formatPainterActive = true;
+    document.getElementById('btn-format-painter').classList.add('active');
+    setSaveStatus('格式刷已激活，点击目标单元格应用格式');
+    document.body.style.cursor = 'copy';
+  }
+}
+
+function applyFormatPainter(targetRow, targetCol) {
+  if (!formatPainterActive || !formatPainterSource || !currentSheet) return;
+  
+  const sourceRow = formatPainterSource.row;
+  const sourceCol = formatPainterSource.col;
+  
+  // 获取源单元格样式
+  const sourceStyle = cellStyles[currentSheet]?.[sourceRow]?.[sourceCol] || {};
+  
+  if (Object.keys(sourceStyle).length === 0) {
+    setSaveStatus('源单元格没有格式', '#e67e22');
+    return;
+  }
+  
+  // 应用到目标单元格
+  if (!cellStyles[currentSheet]) cellStyles[currentSheet] = {};
+  if (!cellStyles[currentSheet][targetRow]) cellStyles[currentSheet][targetRow] = {};
+  cellStyles[currentSheet][targetRow][targetCol] = { ...sourceStyle };
+  
+  // 广播样式变更
+  Object.entries(sourceStyle).forEach(([styleType, value]) => {
+    socket.emit('cell_style_change', {
+      sheet: currentSheet,
+      row: targetRow,
+      col: targetCol,
+      style_type: styleType,
+      value: value
+    });
+  });
+  
+  hot.render();
+  setSaveStatus('格式已应用');
+  
+  // 可选：应用后自动退出格式刷模式（单次模式）
+  // toggleFormatPainter();
+}
+
+// ==================== 冻结行列功能 ====================
+var frozenRows = 0;
+var frozenCols = 0;
+
+function freezeRows() {
+  if (!hot) return;
+  
+  const selected = hot.getSelected();
+  if (!selected || selected.length === 0) {
+    // 如果没有选中，询问要冻结多少行
+    const count = prompt('请输入要冻结的行数（0表示取消冻结）：', frozenRows);
+    if (count === null) return;
+    frozenRows = parseInt(count) || 0;
+  } else {
+    // 使用选中区域的行数
+    const [r1, , r2] = selected[0];
+    frozenRows = Math.max(r1, r2) + 1;
+  }
+  
+  // 重新初始化表格以应用冻结
+  if (activeFilePath && openFileTabs[activeFilePath]) {
+    initTable(openFileTabs[activeFilePath].sheetsData[currentSheet]);
+    setSaveStatus(`已冻结前 ${frozenRows} 行`);
+  }
+}
+
+function freezeCols() {
+  if (!hot) return;
+  
+  const selected = hot.getSelected();
+  if (!selected || selected.length === 0) {
+    // 如果没有选中，询问要冻结多少列
+    const count = prompt('请输入要冻结的列数（0表示取消冻结）：', frozenCols);
+    if (count === null) return;
+    frozenCols = parseInt(count) || 0;
+  } else {
+    // 使用选中区域的列数
+    const [, c1, , c2] = selected[0];
+    frozenCols = Math.max(c1, c2) + 1;
+  }
+  
+  // 重新初始化表格以应用冻结
+  if (activeFilePath && openFileTabs[activeFilePath]) {
+    initTable(openFileTabs[activeFilePath].sheetsData[currentSheet]);
+    setSaveStatus(`已冻结前 ${frozenCols} 列`);
+  }
+}
+
 // ==================== 查找替换功能 ====================
 var findReplaceState = {
   currentMatch: null,
@@ -1260,9 +1380,26 @@ function initTable(data) {
     licenseKey: 'non-commercial-and-evaluation',
     // 启用撤销/重做
     undo: true,
+    // 冻结行列
+    fixedRowsTop: frozenRows,
+    fixedColumnsLeft: frozenCols,
     afterSelection: function(row, col, row2, col2) {
       currentSelection = [row, col, row2, col2];
       lastSelection = [row, col, row2, col2];  // 备份选区
+      
+      // 处理格式刷
+      if (formatPainterActive && formatPainterSource) {
+        // 应用格式刷到选中的单元格
+        for (let r = Math.min(row, row2); r <= Math.max(row, row2); r++) {
+          for (let c = Math.min(col, col2); c <= Math.max(col, col2); c++) {
+            applyFormatPainter(r, c);
+          }
+        }
+        // 应用后退出格式刷模式
+        toggleFormatPainter();
+        return;
+      }
+      
       if (currentFilePath && !isRemoteUpdate) {
         socket.emit('cell_select', { sheet: currentSheet, row, col });
       }
