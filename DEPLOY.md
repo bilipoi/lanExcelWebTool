@@ -4,8 +4,10 @@
 
 ```
 lan_excel_editor/
-├── start.bat              # Windows 启动脚本（双击运行）
-├── download_packages.ps1  # 依赖包下载脚本（有网环境运行）
+├── start.bat              # Windows 启动脚本（双击运行）⭐
+├── start.py               # 跨平台启动器⭐
+├── create_offline_zip.py  # 离线打包工具⭐
+├── download_deps.py       # 下载前端依赖（可选）
 ├── requirements.txt       # Python 依赖清单
 ├── app.py                 # 主程序
 ├── config.py              # 配置文件
@@ -29,6 +31,8 @@ lan_excel_editor/
 │   └── styles/            # 样式文件
 └── packages/              # 离线依赖包（需下载）
 ```
+
+**⭐ 常用工具脚本**
 
 ## 🎯 核心功能使用
 
@@ -65,22 +69,68 @@ A1: [查看预算表] → 链接到"2024/预算.xlsx"
 A2: [查看进度]  → 链接到"2024/进度.xlsx"
 ```
 
+---
+
+## 🛠️ 工具脚本说明
+
+### 启动脚本
+
+| 脚本 | 用途 | 使用场景 |
+|------|------|----------|
+| `start.bat` | Windows 一键启动 | 双击运行，自动配置环境并启动服务 |
+| `start.py` | 跨平台启动器 | Windows/Linux/Mac 通用，支持彩色输出 |
+
+### 打包脚本
+
+| 脚本 | 用途 | 使用场景 |
+|------|------|----------|
+| `create_offline_zip.py` | 创建离线安装包 | 生成包含所有依赖的 zip 文件，用于分发到离线环境 |
+
+**使用示例：**
+```bash
+# 创建离线包
+python create_offline_zip.py
+
+# 生成文件：lan_excel_editor_offline_v1.1.0_YYYYMMDD.zip
+```
+
+### 可选脚本
+
+| 脚本 | 用途 | 说明 |
+|------|------|------|
+| `download_deps.py` | 下载前端依赖 | 如需更新 Handsontable 或 Socket.io 版本时使用 |
+
+**注意：** `packages/` 目录中的 Python 依赖需手动下载：
+```bash
+pip download -r requirements.txt -d packages
+```
+
+---
+
 ## 🚀 快速开始（离线环境）
 
 ### 方法一：完整离线包（推荐）
 
 #### 第 1 步：在有网络的环境中准备
 
+#### 第 1 步：准备依赖（在有网络的环境中）
+
 1. 将项目复制到联网电脑
-2. 打开 PowerShell，进入项目目录
-3. 运行依赖下载脚本：
-   ```powershell
-   .\download_packages.ps1
+2. 下载 Python 依赖包：
+   ```bash
+   pip download -r requirements.txt -d packages
    ```
-4. 等待下载完成，会创建 `packages/` 目录
+3. 等待下载完成，会创建 `packages/` 目录（包含所有 .whl 文件）
 
 #### 第 2 步：打包分发
 
+**方式 A：使用打包脚本（推荐）**
+```bash
+python create_offline_zip.py
+```
+生成 `lan_excel_editor_offline_v1.1.0_YYYYMMDD.zip` 文件
+
+**方式 B：手动复制**
 将整个项目目录（包括 `packages/`）复制到 U 盘或共享文件夹：
 
 ```
