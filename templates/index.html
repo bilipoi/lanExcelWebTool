@@ -193,6 +193,10 @@
     <button class="style-btn" onclick="clearCellStyle()" title="清除格式" style="width:auto;padding:0 8px;" onmousedown="event.preventDefault()">✕ 清除</button>
   </div>
   <div class="style-group">
+    <button class="style-btn" title="创建文件链接" onclick="openHyperlinkModal()" onmousedown="event.preventDefault()" style="width:auto;padding:0 8px;"
+>🔗 链接</button>
+  </div>
+  <div class="style-group">
     <button class="style-btn" title="查找替换 (Ctrl+F)" onclick="openFindReplace()" onmousedown="event.preventDefault()">🔍 查找</button>
     <button class="style-btn" title="撤销 (Ctrl+Z)" onclick="undo()" onmousedown="event.preventDefault()">↶ 撤销</button>
     <button class="style-btn" title="重做 (Ctrl+Y)" onclick="redo()" onmousedown="event.preventDefault()">↷ 重做</button>
@@ -326,6 +330,29 @@
       <button class="btn" onclick="findNext()">查找下一个</button>
       <button class="btn orange" onclick="replaceCurrent()" id="btn-replace-current" disabled>替换</button>
       <button class="btn green" onclick="replaceAll()" id="btn-replace-all" disabled>全部替换</button>
+    </div>
+  </div>
+</div>
+
+<!-- 创建超链接模态框 -->
+<div class="modal-overlay" id="modal-hyperlink">
+  <div class="modal">
+    <h2>创建文件链接</h2>
+    <p style="font-size:12px;color:#666;margin-bottom:10px;">选择一个目标文件，点击后将跳转到该文件</p>
+    <div id="hyperlink-file-list" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:8px;margin-bottom:10px;">
+      <!-- 文件列表将在这里动态生成 -->
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:#666;">或输入文件路径：</label>
+      <input type="text" id="hyperlink-path" placeholder="例如：文件夹/文件名.xlsx" style="margin-top:5px;">
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:12px;color:#666;">显示文本（可选）：</label>
+      <input type="text" id="hyperlink-text" placeholder="默认为文件名称" style="margin-top:5px;">
+    </div>
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeModal('modal-hyperlink')">取消</button>
+      <button class="btn green" onclick="createHyperlink()">创建链接</button>
     </div>
   </div>
 </div>
@@ -709,35 +736,158 @@ document.getElementById('find-text').addEventListener('keydown', function(e) {
   }
 });
 
+// ==================== 超链接功能 ====================
+
+// 打开超链接创建模态框
+function openHyperlinkModal() {
+  if (currentReadonly || !hot) return;
+  
+  const cells = getSelectedCells();
+  if (cells.length === 0) {
+    setSaveStatus('请先选择要添加链接的单元格', '#e67e22');
+    return;
+  }
+  
+  // 生成文件列表
+  const fileListEl = document.getElementById('hyperlink-file-list');
+  fileListEl.innerHTML = '';
+  
+  // 递归获取所有文件
+  function collectFiles(nodes, prefix) {
+    nodes.forEach(node => {
+      if (node.type === 'file') {
+        const item = document.createElement('div');
+        item.className = 'snap-item';
+        item.style.cursor = 'pointer';
+        item.innerHTML = `<span>${prefix}${node.name}</span>`;
+        item.onclick = () => {
+          document.getElementById('hyperlink-path').value = node.path;
+          // 高亮选中的项
+          fileListEl.querySelectorAll('.snap-item').forEach(el => el.style.background = '');
+          item.style.background = '#d0eaff';
+        };
+        fileListEl.appendChild(item);
+      } else if (node.type === 'folder' && node.children) {
+        collectFiles(node.children, prefix + node.name + '/');
+      }
+    });
+  }
+  
+  if (treeData.length === 0) {
+    fileListEl.innerHTML = '<div style="color:#999;padding:8px;">暂无文件</div>';
+  } else {
+    collectFiles(treeData, '');
+  }
+  
+  // 清空输入框
+  document.getElementById('hyperlink-path').value = '';
+  document.getElementById('hyperlink-text').value = '';
+  
+  openModal('modal-hyperlink');
+}
+
+// 创建超链接
+function createHyperlink() {
+  const targetPath = document.getElementById('hyperlink-path').value.trim();
+  const displayText = document.getElementById('hyperlink-text').value.trim();
+  
+  if (!targetPath) {
+    setSaveStatus('请选择或输入目标文件路径', '#e67e22');
+    return;
+  }
+  
+  const cells = getSelectedCells();
+  if (cells.length === 0) return;
+  
+  // 超链接格式: LINK:目标路径|显示文本
+  const linkValue = `LINK:${targetPath}|${displayText || targetPath}`;
+  
+  cells.forEach(cell => {
+    hot.setDataAtCell(cell.row, cell.col, linkValue);
+  });
+  
+  closeModal('modal-hyperlink');
+  setSaveStatus('已创建文件链接');
+}
+
+// 点击超链接打开文件
+function openLinkedFile(targetPath) {
+  if (!targetPath) return;
+  
+  // 检查文件是否已在当前编辑
+  if (targetPath === currentFilePath) {
+    setSaveStatus('当前正在编辑此文件');
+    return;
+  }
+  
+  // 发送打开文件请求
+  socket.emit('join_file', { path: targetPath, username: myUsername });
+}
+
 // 自定义渲染器
 function styledCellRenderer(instance, td, row, col, prop, value, cellProperties) {
-  // 调用默认渲染器
-  Handsontable.renderers.TextRenderer(instance, td, row, col, prop, value, cellProperties);
+  // 检查是否是超链接格式: LINK:目标路径|显示文本
+  const linkMatch = typeof value === 'string' && value.match(/^LINK:(.+?)\|(.+)$/);
   
-  // 应用本地样式（不清空，而是覆盖）
-  if (currentSheet && cellStyles[currentSheet]) {
-    const style = cellStyles[currentSheet][row]?.[col] || {};
+  if (linkMatch) {
+    // 是超链接，渲染为链接样式
+    const targetPath = linkMatch[1];
+    const displayText = linkMatch[2];
     
-    if (style.bold) td.style.fontWeight = 'bold';
-    else td.style.fontWeight = '';
+    // 清空单元格
+    td.innerHTML = '';
     
-    if (style.italic) td.style.fontStyle = 'italic';
-    else td.style.fontStyle = '';
+    // 创建链接元素
+    const link = document.createElement('a');
+    link.href = '#';
+    link.textContent = displayText;
+    link.style.cssText = 'color:#2196f3;text-decoration:underline;cursor:pointer;';
+    link.onclick = function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!currentReadonly) {
+        openLinkedFile(targetPath);
+      }
+    };
     
-    if (style.underline) td.style.textDecoration = 'underline';
-    else td.style.textDecoration = '';
+    td.appendChild(link);
     
-    if (style.fontSize) td.style.fontSize = style.fontSize + 'px';
-    else td.style.fontSize = '';
+    // 应用其他样式
+    if (currentSheet && cellStyles[currentSheet]) {
+      const style = cellStyles[currentSheet][row]?.[col] || {};
+      if (style.bold) td.style.fontWeight = 'bold';
+      if (style.italic) td.style.fontStyle = 'italic';
+      if (style.bgColor) td.style.backgroundColor = style.bgColor;
+    }
+  } else {
+    // 普通单元格，调用默认渲染器
+    Handsontable.renderers.TextRenderer(instance, td, row, col, prop, value, cellProperties);
     
-    if (style.color) td.style.color = style.color;
-    else td.style.color = '';
-    
-    if (style.bgColor) td.style.backgroundColor = style.bgColor;
-    else td.style.backgroundColor = '';
-    
-    if (style.align) td.style.textAlign = style.align;
-    else td.style.textAlign = '';
+    // 应用本地样式（不清空，而是覆盖）
+    if (currentSheet && cellStyles[currentSheet]) {
+      const style = cellStyles[currentSheet][row]?.[col] || {};
+      
+      if (style.bold) td.style.fontWeight = 'bold';
+      else td.style.fontWeight = '';
+      
+      if (style.italic) td.style.fontStyle = 'italic';
+      else td.style.fontStyle = '';
+      
+      if (style.underline) td.style.textDecoration = 'underline';
+      else td.style.textDecoration = '';
+      
+      if (style.fontSize) td.style.fontSize = style.fontSize + 'px';
+      else td.style.fontSize = '';
+      
+      if (style.color) td.style.color = style.color;
+      else td.style.color = '';
+      
+      if (style.bgColor) td.style.backgroundColor = style.bgColor;
+      else td.style.backgroundColor = '';
+      
+      if (style.align) td.style.textAlign = style.align;
+      else td.style.textAlign = '';
+    }
   }
 }
 
