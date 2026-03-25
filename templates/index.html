@@ -73,6 +73,17 @@
 
     /* 右侧编辑区 */
     #editor-area{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+    
+    /* 文件页签栏（多页签） */
+    #file-tabs{background:#2c3e50;padding:6px 14px 0;display:flex;gap:2px;flex-shrink:0;overflow-x:auto;}
+    .file-tab{padding:6px 15px;background:#34495e;border-radius:4px 4px 0 0;cursor:pointer;font-size:12px;color:#ecf0f1;border:1px solid #465669;border-bottom:none;display:flex;align-items:center;gap:6px;max-width:200px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+    .file-tab:hover{background:#3d566e;}
+    .file-tab.active{background:#fff;color:#1e3a5f;font-weight:bold;}
+    .file-tab-close{width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;cursor:pointer;opacity:0.7;}
+    .file-tab-close:hover{opacity:1;background:rgba(0,0,0,0.2);color:#e74c3c;}
+    .file-tab.active .file-tab-close{color:#666;}
+    .file-tab.active .file-tab-close:hover{background:rgba(0,0,0,0.1);color:#c0392b;}
+    
     #sheet-tabs{background:#dde3ea;padding:4px 14px 0;display:flex;gap:4px;flex-shrink:0;}
     .sheet-tab{padding:4px 13px;background:#c5cdd6;border-radius:4px 4px 0 0;cursor:pointer;font-size:12px;border:1px solid #b0bac5;border-bottom:none;}
     .sheet-tab.active{background:#fff;font-weight:bold;color:#1e3a5f;}
@@ -225,10 +236,12 @@
   </div>
 
   <div id="editor-area">
+    <!-- 文件页签栏 -->
+    <div id="file-tabs"></div>
     <div id="sheet-tabs"></div>
     <div id="table-container">
       <div id="hot-container"></div>
-      <div id="no-file-tip">请从左侧选择或新建文件</div>
+      <div id="no-file-tip">请从左侧选择或新建文件，或在已有文件中点击超链接打开新页签</div>
     </div>
   </div>
 </div>
@@ -361,22 +374,55 @@
 // ==================== 全局变量 ====================
 var socket = io();
 var hot = null;
-var sheetsData = {};
+
+// ==================== 多页签系统 ====================
+// 打开的文件页签：{filePath: {sheetsData, currentSheet, cellStyles, readonly, myColor, ...}}
+var openFileTabs = {};
+// 当前激活的文件页签
+var activeFilePath = null;
+// 当前文件的 Sheet 相关（从 activeFilePath 对应的 tab 中获取）
 var currentSheet = null;
-var currentFilePath = null;
-var currentReadonly = false;
+
+// 兼容旧代码的 getter
+Object.defineProperty(window, 'sheetsData', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.sheetsData || {} : {}; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].sheetsData = val; }
+});
+Object.defineProperty(window, 'currentFilePath', {
+  get: function() { return activeFilePath; },
+  set: function(val) { activeFilePath = val; }
+});
+Object.defineProperty(window, 'currentReadonly', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.readonly || false : false; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].readonly = val; }
+});
+Object.defineProperty(window, 'cellStyles', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.cellStyles || {} : {}; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].cellStyles = val; }
+});
+Object.defineProperty(window, 'myUserColor', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.myColor || '' : ''; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].myColor = val; }
+});
+Object.defineProperty(window, 'otherUsersSelections', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.otherUsers || {} : {}; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].otherUsers = val; }
+});
+Object.defineProperty(window, 'currentSelection', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.selection || null : null; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].selection = val; }
+});
+Object.defineProperty(window, 'lastSelection', {
+  get: function() { return activeFilePath ? openFileTabs[activeFilePath]?.lastSelection || null : null; },
+  set: function(val) { if (activeFilePath && openFileTabs[activeFilePath]) openFileTabs[activeFilePath].lastSelection = val; }
+});
+
+// 其他全局变量
 var myUsername = '';
 var isRemoteUpdate = false;
-var myUserColor = '';
-var otherUsersSelections = {};
 var ctxTarget = null;
 var ctxParentFolder = '';
 var treeData = [];
-
-// 本地单元格样式存储：{sheetName: {row: {col: {bold, italic, fontSize, color, bgColor, align}}}}
-var cellStyles = {};
-var currentSelection = null;
-var lastSelection = null;  // 备份最后一次选区
 
 // ==================== 工具函数 ====================
 function deepCopy(data) { return data.map(r => r.slice()); }
@@ -390,6 +436,160 @@ function setSaveStatus(msg, color) {
 
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 function openModal(id) { document.getElementById(id).classList.add('show'); }
+
+// ==================== 多页签系统 ====================
+
+function renderFileTabs() {
+  const container = document.getElementById('file-tabs');
+  container.innerHTML = '';
+  
+  Object.keys(openFileTabs).forEach(filePath => {
+    const tab = document.createElement('div');
+    tab.className = 'file-tab' + (filePath === activeFilePath ? ' active' : '');
+    
+    const fileName = filePath.split('/').pop();
+    const isReadonly = openFileTabs[filePath].readonly;
+    
+    // 文件名
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = fileName + (isReadonly ? ' 🔒' : '');
+    nameSpan.style.flex = '1';
+    nameSpan.style.overflow = 'hidden';
+    nameSpan.style.textOverflow = 'ellipsis';
+    tab.appendChild(nameSpan);
+    
+    // 关闭按钮
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'file-tab-close';
+    closeBtn.innerHTML = '×';
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeFileTab(filePath);
+    };
+    tab.appendChild(closeBtn);
+    
+    // 点击切换页签
+    tab.onclick = () => switchToFileTab(filePath);
+    
+    container.appendChild(tab);
+  });
+}
+
+function openFileTab(filePath, data) {
+  // 如果页签已存在，直接切换
+  if (openFileTabs[filePath]) {
+    switchToFileTab(filePath);
+    return;
+  }
+  
+  // 创建新页签
+  openFileTabs[filePath] = {
+    sheetsData: data.sheets || {},
+    currentSheet: Object.keys(data.sheets || {})[0],
+    cellStyles: data.cell_styles || {},
+    readonly: data.readonly || false,
+    myColor: data.my_color || '',
+    otherUsers: {},
+    selection: null,
+    lastSelection: null,
+    users: data.users || []
+  };
+  
+  activeFilePath = filePath;
+  currentSheet = openFileTabs[filePath].currentSheet;
+  
+  // 更新 UI
+  renderFileTabs();
+  updateToolbarForActiveTab();
+  
+  // 渲染内容
+  document.getElementById('no-file-tip').style.display = 'none';
+  renderTabs();
+  initTable(openFileTabs[filePath].sheetsData[currentSheet]);
+  renderUsers(openFileTabs[filePath].users);
+  setSaveStatus('已打开: ' + filePath.split('/').pop());
+  highlightTreeItem(filePath);
+  
+  showStyleToolbar(true);
+}
+
+function switchToFileTab(filePath) {
+  if (!openFileTabs[filePath] || filePath === activeFilePath) return;
+  
+  // 保存当前页签的状态
+  if (activeFilePath && openFileTabs[activeFilePath]) {
+    openFileTabs[activeFilePath].currentSheet = currentSheet;
+  }
+  
+  // 切换到新页签
+  activeFilePath = filePath;
+  const tab = openFileTabs[filePath];
+  currentSheet = tab.currentSheet;
+  
+  // 更新 UI
+  renderFileTabs();
+  updateToolbarForActiveTab();
+  
+  // 渲染内容
+  document.getElementById('no-file-tip').style.display = 'none';
+  renderTabs();
+  initTable(tab.sheetsData[currentSheet]);
+  renderUsers(tab.users);
+  setSaveStatus('切换到: ' + filePath.split('/').pop());
+  highlightTreeItem(filePath);
+}
+
+function closeFileTab(filePath) {
+  if (!openFileTabs[filePath]) return;
+  
+  // 离开该文件的房间
+  socket.emit('leave_file', { path: filePath });
+  
+  // 删除页签数据
+  delete openFileTabs[filePath];
+  
+  // 如果关闭的是当前页签，切换到其他页签
+  if (filePath === activeFilePath) {
+    const remainingTabs = Object.keys(openFileTabs);
+    if (remainingTabs.length > 0) {
+      switchToFileTab(remainingTabs[0]);
+    } else {
+      // 没有页签了，重置编辑器
+      activeFilePath = null;
+      currentSheet = null;
+      if (hot) {
+        hot.destroy();
+        hot = null;
+      }
+      document.getElementById('no-file-tip').style.display = 'flex';
+      document.getElementById('sheet-tabs').innerHTML = '';
+      document.getElementById('users-list').innerHTML = '';
+      showStyleToolbar(false);
+      document.getElementById('filename-display').textContent = '未打开文件';
+      document.getElementById('readonly-badge').style.display = 'none';
+      document.getElementById('btn-save').disabled = true;
+      document.getElementById('btn-download').disabled = true;
+      document.getElementById('btn-versions').disabled = true;
+      document.getElementById('btn-leave').disabled = true;
+      highlightTreeItem(null);
+    }
+  }
+  
+  renderFileTabs();
+}
+
+function updateToolbarForActiveTab() {
+  if (!activeFilePath || !openFileTabs[activeFilePath]) return;
+  
+  const tab = openFileTabs[activeFilePath];
+  document.getElementById('filename-display').textContent = activeFilePath.split('/').pop();
+  document.getElementById('readonly-badge').style.display = tab.readonly ? 'inline-block' : 'none';
+  document.getElementById('btn-save').disabled = tab.readonly;
+  document.getElementById('btn-download').disabled = false;
+  document.getElementById('btn-versions').disabled = false;
+  document.getElementById('btn-leave').disabled = false;
+  showStyleToolbar(!tab.readonly);
+}
 
 // ==================== 本地样式系统 ====================
 function showStyleToolbar(show) {
@@ -810,17 +1010,18 @@ function createHyperlink() {
   setSaveStatus('已创建文件链接');
 }
 
-// 点击超链接打开文件
+// 点击超链接打开文件（在新页签中）
 function openLinkedFile(targetPath) {
   if (!targetPath) return;
   
-  // 检查文件是否已在当前编辑
-  if (targetPath === currentFilePath) {
-    setSaveStatus('当前正在编辑此文件');
+  // 检查文件是否已在某个页签中打开
+  if (openFileTabs[targetPath]) {
+    switchToFileTab(targetPath);
+    setSaveStatus('切换到已打开的文件');
     return;
   }
   
-  // 发送打开文件请求
+  // 在新页签中打开
   socket.emit('join_file', { path: targetPath, username: myUsername });
 }
 
@@ -895,28 +1096,8 @@ function styledCellRenderer(instance, td, row, col, prop, value, cellProperties)
 socket.on('connect', () => { loadTree(); });
 
 socket.on('file_opened', data => {
-  sheetsData = data.sheets;
-  currentFilePath = data.path;
-  currentReadonly = data.readonly;
-  myUserColor = data.my_color || '';
-  cellStyles = data.cell_styles || {};  // 加载持久化的样式
-  
-  document.getElementById('filename-display').textContent = data.filename || data.path;
-  document.getElementById('readonly-badge').style.display = currentReadonly ? 'inline-block' : 'none';
-  document.getElementById('btn-save').disabled = currentReadonly;
-  document.getElementById('btn-download').disabled = false;
-  document.getElementById('btn-versions').disabled = false;
-  document.getElementById('btn-leave').disabled = false;
-  document.getElementById('no-file-tip').style.display = 'none';
-  
-  showStyleToolbar(true);
-  
-  currentSheet = Object.keys(sheetsData)[0];
-  renderTabs();
-  initTable(sheetsData[currentSheet]);
-  renderUsers(data.users || []);
-  setSaveStatus('已加入文件: ' + (data.filename || data.path));
-  highlightTreeItem(currentFilePath);
+  // 使用多页签系统打开文件
+  openFileTab(data.path, data);
 });
 
 socket.on('cell_selected', data => {
@@ -1183,18 +1364,23 @@ function openFile(path) {
 }
 
 function leaveCurrentFile() {
-  if (!currentFilePath) return;
-  socket.emit('leave_file', { path: currentFilePath });
+  if (!activeFilePath) return;
+  closeFileTab(activeFilePath);
 }
 
 function saveFile() {
-  if (currentReadonly || !currentFilePath) return;
-  socket.emit('save_file');
+  if (!activeFilePath) return;
+  if (openFileTabs[activeFilePath]?.readonly) {
+    setSaveStatus('只读文件无法保存', '#e67e22');
+    return;
+  }
+  // 发送保存请求时包含当前文件路径
+  socket.emit('save_file', { path: activeFilePath });
 }
 
 function downloadFile() {
-  if (!currentFilePath) return;
-  window.location.href = '/api/file/download?path=' + encodeURIComponent(currentFilePath);
+  if (!activeFilePath) return;
+  window.location.href = '/api/file/download?path=' + encodeURIComponent(activeFilePath);
 }
 
 function joinSession() {
