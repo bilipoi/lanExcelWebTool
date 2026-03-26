@@ -1817,7 +1817,7 @@ async function uploadAttachments() {
       try {
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('file_rel', currentFilePath);
+        formData.append('path', currentFilePath);
         formData.append('sheet', currentSheet);
         formData.append('row', cell.row);
         formData.append('col', cell.col);

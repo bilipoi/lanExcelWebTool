@@ -201,7 +201,7 @@ def register_http_handlers(app):
     def api_attachment_upload():
         """上传附件到单元格"""
         try:
-            file_rel = request.form.get('file', '')
+            file_rel = request.form.get('path', '')
             sheet = request.form.get('sheet', 'Sheet1')
             row = int(request.form.get('row', 0))
             col = int(request.form.get('col', 0))
