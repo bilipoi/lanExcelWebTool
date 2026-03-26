@@ -214,6 +214,53 @@ def register_websocket_handlers(socketio):
             'value': value, 'username': username
         }, room=rel, broadcast=True, include_self=False)
     
+    @socketio.on('structure_change')
+    def handle_structure_change(data):
+        """处理表格结构变更（增删行列）"""
+        sid = request.sid
+        
+        if sid not in user_current_file:
+            return
+        
+        rel = user_current_file[sid]
+        if rel not in file_sessions:
+            return
+        
+        sess = file_sessions[rel]
+        
+        # 只读检查
+        if sess.readonly:
+            emit('error', {'message': '文件为只读，无法编辑'})
+            return
+        
+        sheet = data.get('sheet', 'Sheet1')
+        change_type = data.get('type', '')
+        index = int(data.get('index', 0))
+        amount = int(data.get('amount', 1))
+        
+        user_info = sess.online_users.get(sid)
+        username = user_info['username'] if user_info else '未知'
+        
+        # 更新数据
+        if sheet in sess.spreadsheet_data:
+            if change_type == 'remove_row':
+                # 删除行
+                del sess.spreadsheet_data[sheet][index:index + amount]
+            elif change_type == 'add_row':
+                # 添加行
+                for i in range(amount):
+                    cols_count = len(sess.spreadsheet_data[sheet][0]) if sess.spreadsheet_data[sheet] else 26
+                    sess.spreadsheet_data[sheet].insert(index + i, ['' for _ in range(cols_count)])
+        
+        # 广播结构变更
+        emit('structure_updated', {
+            'sheet': sheet,
+            'type': change_type,
+            'index': index,
+            'amount': amount,
+            'username': username
+        }, room=rel, broadcast=True, include_self=False)
+    
     @socketio.on('save_file')
     def handle_save_file(data=None):
         """手动保存"""

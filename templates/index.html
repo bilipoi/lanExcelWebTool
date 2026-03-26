@@ -2079,6 +2079,32 @@ socket.on('cell_updated', data => {
   setSaveStatus(username + ' 正在编辑…');
 });
 
+socket.on('structure_updated', data => {
+  const { sheet, type, index, amount, username } = data;
+  if (!sheetsData[sheet]) return;
+  
+  if (type === 'remove_row') {
+    // 删除行
+    sheetsData[sheet].splice(index, amount);
+    if (sheet === currentSheet && hot) {
+      isRemoteUpdate = true;
+      hot.alter('remove_row', index, amount);
+      setTimeout(() => { isRemoteUpdate = false; }, 0);
+    }
+  } else if (type === 'add_row') {
+    // 添加行
+    for (let i = 0; i < amount; i++) {
+      sheetsData[sheet].splice(index + i, 0, []);
+    }
+    if (sheet === currentSheet && hot) {
+      isRemoteUpdate = true;
+      hot.alter('insert_row', index, amount);
+      setTimeout(() => { isRemoteUpdate = false; }, 0);
+    }
+  }
+  setSaveStatus(username + ' 修改了表格结构');
+});
+
 socket.on('cell_style_updated', data => {
   const { sheet, row, col, style_type, value } = data;
   if (!cellStyles[sheet]) cellStyles[sheet] = {};
@@ -2427,8 +2453,35 @@ function initTable(data) {
           value: newVal === null ? '' : String(newVal)
         });
       });
+    },
+    afterRemoveRow: function(index, amount) {
+      // 同步删除到 sheetsData
+      if (sheetsData[currentSheet] && !isRemoteUpdate && !currentReadonly) {
+        sheetsData[currentSheet].splice(index, amount);
+        // 发送结构变更事件
+        socket.emit('structure_change', {
+          sheet: currentSheet,
+          type: 'remove_row',
+          index: index,
+          amount: amount
+        });
+      }
+    },
+    afterCreateRow: function(index, amount) {
+      // 同步新增行到 sheetsData
+      if (sheetsData[currentSheet] && !isRemoteUpdate && !currentReadonly) {
+        for (let i = 0; i < amount; i++) {
+          sheetsData[currentSheet].splice(index + i, 0, []);
+        }
+        // 发送结构变更事件
+        socket.emit('structure_change', {
+          sheet: currentSheet,
+          type: 'add_row',
+          index: index,
+          amount: amount
+        });
+      }
     }
-  });
   
   hot.addHook('afterScroll', () => setTimeout(updateCollaborationCursors, 10));
   hot.addHook('afterRender', () => updateCollaborationCursors());
