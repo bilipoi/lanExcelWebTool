@@ -119,13 +119,16 @@
     .kanban-empty-state{text-align:center;color:#999;padding:40px 20px;font-size:13px;}
     .kanban-column-body.drag-over{background:#d4e6f1;}
     
-    /* 看板展示列选择器 */
-    #kanban-display-selector{display:flex;gap:6px;flex-wrap:wrap;max-width:500px;align-items:center;}
-    .kanban-display-tag{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;background:#f0f0f0;border:1px solid #e0e0e0;border-radius:16px;font-size:12px;color:#555;cursor:pointer;transition:all 0.2s;user-select:none;}
+    /* 看板展示列选择器 - 单行滚动 */
+    #kanban-display-selector{display:flex;gap:4px;flex-wrap:nowrap;max-width:350px;align-items:center;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin;}
+    #kanban-display-selector::-webkit-scrollbar{height:4px;}
+    #kanban-display-selector::-webkit-scrollbar-track{background:transparent;}
+    #kanban-display-selector::-webkit-scrollbar-thumb{background:#ddd;border-radius:2px;}
+    .kanban-display-tag{display:inline-flex;align-items:center;gap:3px;padding:3px 8px;background:#f0f0f0;border:1px solid #e0e0e0;border-radius:12px;font-size:11px;color:#555;cursor:pointer;transition:all 0.2s;user-select:none;white-space:nowrap;flex-shrink:0;}
     .kanban-display-tag:hover{background:#e8e8e8;border-color:#d0d0d0;}
     .kanban-display-tag.selected{background:#e3f2fd;border-color:#2196f3;color:#1976d2;}
     .kanban-display-tag.selected:hover{background:#bbdefb;}
-    .kanban-display-tag .check-icon{display:none;font-size:10px;}
+    .kanban-display-tag .check-icon{display:none;font-size:9px;}
     .kanban-display-tag.selected .check-icon{display:inline;}
     .kanban-display-tag.disabled{opacity:0.4;cursor:not-allowed;background:#f5f5f5;border-color:#e0e0e0;color:#aaa;}
 
@@ -2482,6 +2485,7 @@ function initTable(data) {
         });
       }
     }
+  });
   
   hot.addHook('afterScroll', () => setTimeout(updateCollaborationCursors, 10));
   hot.addHook('afterRender', () => updateCollaborationCursors());
