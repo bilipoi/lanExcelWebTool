@@ -593,7 +593,13 @@ var ctxParentFolder = '';
 var treeData = [];
 
 // ==================== 工具函数 ====================
-function deepCopy(data) { return data.map(r => r.slice()); }
+function deepCopy(data) { 
+  if (!data || !Array.isArray(data)) {
+    // 如果数据为空或未定义，返回空数组
+    return [];
+  }
+  return data.map(r => r.slice()); 
+}
 
 function setSaveStatus(msg, color) {
   const el = document.getElementById('save-status');
@@ -650,10 +656,20 @@ function openFileTab(filePath, data) {
     return;
   }
   
+  // 确保 sheets 数据有效
+  const sheets = data.sheets || {};
+  const sheetNames = Object.keys(sheets);
+  
+  // 如果没有工作表，创建默认的 Sheet1
+  if (sheetNames.length === 0) {
+    sheets['Sheet1'] = [];
+    sheetNames.push('Sheet1');
+  }
+  
   // 创建新页签
   openFileTabs[filePath] = {
-    sheetsData: data.sheets || {},
-    currentSheet: Object.keys(data.sheets || {})[0],
+    sheetsData: sheets,
+    currentSheet: sheetNames[0],
     cellStyles: data.cell_styles || {},
     cellTypes: data.cell_types || {},
     readonly: data.readonly || false,
@@ -674,7 +690,14 @@ function openFileTab(filePath, data) {
   // 渲染内容
   document.getElementById('no-file-tip').style.display = 'none';
   renderTabs();
+  
+  // 确保数据存在再初始化表格
+  const sheetData = openFileTabs[filePath].sheetsData[currentSheet];
+  if (!sheetData || !Array.isArray(sheetData)) {
+    openFileTabs[filePath].sheetsData[currentSheet] = [];
+  }
   initTable(openFileTabs[filePath].sheetsData[currentSheet]);
+  
   renderUsers(openFileTabs[filePath].users);
   setSaveStatus('已打开: ' + filePath.split('/').pop());
   highlightTreeItem(filePath);
@@ -694,6 +717,11 @@ function switchToFileTab(filePath) {
   activeFilePath = filePath;
   const tab = openFileTabs[filePath];
   currentSheet = tab.currentSheet;
+  
+  // 确保数据存在
+  if (!tab.sheetsData[currentSheet] || !Array.isArray(tab.sheetsData[currentSheet])) {
+    tab.sheetsData[currentSheet] = [];
+  }
   
   // 更新 UI
   renderFileTabs();
