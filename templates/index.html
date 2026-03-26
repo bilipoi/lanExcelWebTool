@@ -285,10 +285,18 @@
       <div id="hot-container"></div>
       <div id="kanban-container">
         <div id="kanban-header">
-          <label>📊 看板视图 - 状态列：</label>
-          <select id="kanban-status-column" onchange="onKanbanStatusColumnChange(this.value)">
-            <option value="">选择状态列...</option>
-          </select>
+          <label>📊 看板视图</label>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <label>状态列：</label>
+            <select id="kanban-status-column" onchange="onKanbanStatusColumnChange(this.value)">
+              <option value="">选择状态列...</option>
+            </select>
+            <label style="margin-left:10px;">展示列：</label>
+            <select id="kanban-display-columns" multiple style="min-width:150px;height:28px;" onchange="onKanbanDisplayColumnsChange()">
+              <!-- 动态填充 -->
+            </select>
+            <span style="font-size:11px;color:#999;">(按住Ctrl多选)</span>
+          </div>
         </div>
         <div id="kanban-board"></div>
       </div>
@@ -2459,6 +2467,7 @@ function clearAllCollaborationCursors() {
 
 // ==================== 看板视图功能 ====================
 var kanbanStatusColumn = -1;  // 看板状态列索引
+var kanbanDisplayColumns = [];  // 看板展示列索引数组
 var kanbanDraggedCard = null;  // 当前拖拽的卡片
 
 function switchViewMode(mode) {
@@ -2475,27 +2484,70 @@ function switchViewMode(mode) {
 function initKanbanView() {
   if (!currentSheet || !sheetsData[currentSheet]) return;
   
-  // 更新状态列选择器
-  const select = document.getElementById('kanban-status-column');
-  select.innerHTML = '<option value="">选择状态列...</option>';
-  
   const data = sheetsData[currentSheet];
-  if (data.length > 0 && data[0].length > 0) {
-    for (let i = 0; i < data[0].length; i++) {
-      const colName = data[0][i] || `列 ${String.fromCharCode(65 + i)}`;
-      select.innerHTML += `<option value="${i}">${colName}</option>`;
-    }
+  if (data.length === 0 || data[0].length === 0) return;
+  
+  // 更新状态列选择器
+  const statusSelect = document.getElementById('kanban-status-column');
+  statusSelect.innerHTML = '<option value="">选择状态列...</option>';
+  
+  // 更新展示列选择器
+  const displaySelect = document.getElementById('kanban-display-columns');
+  displaySelect.innerHTML = '';
+  
+  for (let i = 0; i < data[0].length; i++) {
+    const colName = data[0][i] || `列 ${String.fromCharCode(65 + i)}`;
+    statusSelect.innerHTML += `<option value="${i}">${colName}</option>`;
+    
+    // 展示列选择（排除状态列）
+    const option = document.createElement('option');
+    option.value = i;
+    option.textContent = colName;
+    option.disabled = i === kanbanStatusColumn;
+    displaySelect.appendChild(option);
   }
+  
+  // 恢复之前的选择
+  if (kanbanStatusColumn >= 0 && kanbanStatusColumn < data[0].length) {
+    statusSelect.value = kanbanStatusColumn;
+  }
+  
+  // 恢复展示列选择（排除状态列）
+  kanbanDisplayColumns = kanbanDisplayColumns.filter(idx => idx >= 0 && idx < data[0].length && idx !== kanbanStatusColumn);
+  kanbanDisplayColumns.forEach(idx => {
+    const option = displaySelect.querySelector(`option[value="${idx}"]`);
+    if (option) option.selected = true;
+  });
   
   // 如果已经选择了状态列，重新渲染看板
   if (kanbanStatusColumn >= 0) {
-    select.value = kanbanStatusColumn;
     renderKanbanBoard();
   }
 }
 
+function onKanbanDisplayColumnsChange() {
+  const select = document.getElementById('kanban-display-columns');
+  kanbanDisplayColumns = Array.from(select.selectedOptions).map(opt => parseInt(opt.value));
+  // 排除状态列
+  kanbanDisplayColumns = kanbanDisplayColumns.filter(idx => idx !== kanbanStatusColumn);
+  renderKanbanBoard();
+}
+
 function onKanbanStatusColumnChange(colIndex) {
   kanbanStatusColumn = parseInt(colIndex);
+  
+  // 从展示列中移除状态列
+  kanbanDisplayColumns = kanbanDisplayColumns.filter(idx => idx !== kanbanStatusColumn);
+  
+  // 更新展示列选择器（禁用状态列选项）
+  const displaySelect = document.getElementById('kanban-display-columns');
+  if (displaySelect) {
+    Array.from(displaySelect.options).forEach(option => {
+      option.disabled = parseInt(option.value) === kanbanStatusColumn;
+      if (option.disabled) option.selected = false;
+    });
+  }
+  
   if (!isNaN(kanbanStatusColumn) && kanbanStatusColumn >= 0) {
     renderKanbanBoard();
   } else {
@@ -2574,22 +2626,59 @@ function createKanbanCard(card) {
   el.draggable = true;
   el.dataset.row = card.row;
   
-  // 获取标题（第一列或有数据的列）
-  let title = '';
-  for (let i = 0; i < card.data.length; i++) {
-    if (i !== kanbanStatusColumn && card.data[i]) {
-      title = card.data[i];
-      break;
+  // 确定要展示的列
+  let displayCols = kanbanDisplayColumns;
+  
+  // 如果没有选择展示列，默认显示第一列（状态列除外）
+  if (displayCols.length === 0) {
+    for (let i = 0; i < card.data.length; i++) {
+      if (i !== kanbanStatusColumn && card.data[i]) {
+        displayCols = [i];
+        break;
+      }
     }
+  }
+  
+  // 过滤掉状态列
+  displayCols = displayCols.filter(idx => idx !== kanbanStatusColumn && idx < card.data.length);
+  
+  // 获取主标题（第一个展示列）
+  let title = '';
+  if (displayCols.length > 0) {
+    title = card.data[displayCols[0]] || '';
   }
   if (!title) title = `行 ${card.row + 1}`;
   
   // 限制标题长度
-  if (title.length > 50) title = title.substring(0, 50) + '...';
+  if (title.length > 60) title = title.substring(0, 60) + '...';
+  
+  // 构建其他展示字段
+  let otherFieldsHtml = '';
+  if (displayCols.length > 1) {
+    const data = sheetsData[currentSheet];
+    otherFieldsHtml = '<div class="kanban-card-fields" style="margin-top:8px;padding-top:8px;border-top:1px solid #f0f0f0;">';
+    
+    displayCols.slice(1).forEach(colIdx => {
+      const colName = data[0][colIdx] || `列 ${String.fromCharCode(65 + colIdx)}`;
+      const value = card.data[colIdx] || '';
+      if (value) {
+        let displayValue = value;
+        if (displayValue.length > 30) displayValue = displayValue.substring(0, 30) + '...';
+        otherFieldsHtml += `
+          <div style="font-size:11px;color:#666;margin-top:4px;">
+            <span style="color:#999;">${escapeHtml(colName)}:</span> ${escapeHtml(displayValue)}
+          </div>
+        `;
+      }
+    });
+    
+    otherFieldsHtml += '</div>';
+  }
   
   el.innerHTML = `
     <div class="kanban-card-title">${escapeHtml(title)}</div>
-    <div class="kanban-card-meta">
+    ${otherFieldsHtml}
+    <div class="kanban-card-meta" style="margin-top:8px;">
       <span>行 ${card.row + 1}</span>
     </div>
   `;
