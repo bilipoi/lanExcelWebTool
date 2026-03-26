@@ -118,6 +118,16 @@
     .kanban-card-tag{background:#e3f2fd;color:#1976d2;padding:2px 8px;border-radius:12px;font-size:10px;}
     .kanban-empty-state{text-align:center;color:#999;padding:40px 20px;font-size:13px;}
     .kanban-column-body.drag-over{background:#d4e6f1;}
+    
+    /* 看板展示列选择器 */
+    #kanban-display-selector{display:flex;gap:6px;flex-wrap:wrap;max-width:500px;align-items:center;}
+    .kanban-display-tag{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;background:#f0f0f0;border:1px solid #e0e0e0;border-radius:16px;font-size:12px;color:#555;cursor:pointer;transition:all 0.2s;user-select:none;}
+    .kanban-display-tag:hover{background:#e8e8e8;border-color:#d0d0d0;}
+    .kanban-display-tag.selected{background:#e3f2fd;border-color:#2196f3;color:#1976d2;}
+    .kanban-display-tag.selected:hover{background:#bbdefb;}
+    .kanban-display-tag .check-icon{display:none;font-size:10px;}
+    .kanban-display-tag.selected .check-icon{display:inline;}
+    .kanban-display-tag.disabled{opacity:0.4;cursor:not-allowed;background:#f5f5f5;border-color:#e0e0e0;color:#aaa;}
 
     /* 协作指示器 */
     .collab-cursor{position:absolute;pointer-events:none;z-index:100;transition:all .2s ease;}
@@ -298,10 +308,9 @@
               <option value="">选择状态列...</option>
             </select>
             <label style="margin-left:10px;">展示列：</label>
-            <select id="kanban-display-columns" multiple style="min-width:150px;height:28px;" onchange="onKanbanDisplayColumnsChange()">
-              <!-- 动态填充 -->
-            </select>
-            <span style="font-size:11px;color:#999;">(按住Ctrl多选)</span>
+            <div id="kanban-display-selector" style="display:flex;gap:6px;flex-wrap:wrap;max-width:400px;">
+              <!-- 动态生成标签 -->
+            </div>
           </div>
         </div>
         <div id="kanban-board"></div>
@@ -2497,20 +2506,28 @@ function initKanbanView() {
   const statusSelect = document.getElementById('kanban-status-column');
   statusSelect.innerHTML = '<option value="">选择状态列...</option>';
   
-  // 更新展示列选择器
-  const displaySelect = document.getElementById('kanban-display-columns');
-  displaySelect.innerHTML = '';
+  // 清空并重新生成展示列标签
+  const displaySelector = document.getElementById('kanban-display-selector');
+  displaySelector.innerHTML = '';
   
   for (let i = 0; i < data[0].length; i++) {
     const colName = data[0][i] || `列 ${String.fromCharCode(65 + i)}`;
     statusSelect.innerHTML += `<option value="${i}">${colName}</option>`;
     
-    // 展示列选择（排除状态列）
-    const option = document.createElement('option');
-    option.value = i;
-    option.textContent = colName;
-    option.disabled = i === kanbanStatusColumn;
-    displaySelect.appendChild(option);
+    // 创建标签元素
+    const tag = document.createElement('div');
+    tag.className = 'kanban-display-tag';
+    tag.dataset.colIndex = i;
+    tag.innerHTML = `<span class="check-icon">✓</span> ${escapeHtml(colName)}`;
+    
+    // 如果是状态列，禁用
+    if (i === kanbanStatusColumn) {
+      tag.classList.add('disabled');
+    } else {
+      tag.onclick = () => toggleKanbanDisplayColumn(i);
+    }
+    
+    displaySelector.appendChild(tag);
   }
   
   // 恢复之前的选择
@@ -2520,10 +2537,7 @@ function initKanbanView() {
   
   // 恢复展示列选择（排除状态列）
   kanbanDisplayColumns = kanbanDisplayColumns.filter(idx => idx >= 0 && idx < data[0].length && idx !== kanbanStatusColumn);
-  kanbanDisplayColumns.forEach(idx => {
-    const option = displaySelect.querySelector(`option[value="${idx}"]`);
-    if (option) option.selected = true;
-  });
+  updateKanbanDisplayTags();
   
   // 如果已经选择了状态列，重新渲染看板
   if (kanbanStatusColumn >= 0) {
@@ -2531,12 +2545,31 @@ function initKanbanView() {
   }
 }
 
-function onKanbanDisplayColumnsChange() {
-  const select = document.getElementById('kanban-display-columns');
-  kanbanDisplayColumns = Array.from(select.selectedOptions).map(opt => parseInt(opt.value));
-  // 排除状态列
-  kanbanDisplayColumns = kanbanDisplayColumns.filter(idx => idx !== kanbanStatusColumn);
+function toggleKanbanDisplayColumn(colIndex) {
+  const index = kanbanDisplayColumns.indexOf(colIndex);
+  if (index === -1) {
+    // 添加
+    kanbanDisplayColumns.push(colIndex);
+  } else {
+    // 移除
+    kanbanDisplayColumns.splice(index, 1);
+  }
+  updateKanbanDisplayTags();
   renderKanbanBoard();
+}
+
+function updateKanbanDisplayTags() {
+  const displaySelector = document.getElementById('kanban-display-selector');
+  const tags = displaySelector.querySelectorAll('.kanban-display-tag');
+  
+  tags.forEach(tag => {
+    const colIndex = parseInt(tag.dataset.colIndex);
+    if (kanbanDisplayColumns.includes(colIndex)) {
+      tag.classList.add('selected');
+    } else {
+      tag.classList.remove('selected');
+    }
+  });
 }
 
 function onKanbanStatusColumnChange(colIndex) {
@@ -2545,13 +2578,24 @@ function onKanbanStatusColumnChange(colIndex) {
   // 从展示列中移除状态列
   kanbanDisplayColumns = kanbanDisplayColumns.filter(idx => idx !== kanbanStatusColumn);
   
-  // 更新展示列选择器（禁用状态列选项）
-  const displaySelect = document.getElementById('kanban-display-columns');
-  if (displaySelect) {
-    Array.from(displaySelect.options).forEach(option => {
-      option.disabled = parseInt(option.value) === kanbanStatusColumn;
-      if (option.disabled) option.selected = false;
+  // 更新展示列标签（禁用状态列标签）
+  const displaySelector = document.getElementById('kanban-display-selector');
+  if (displaySelector) {
+    const tags = displaySelector.querySelectorAll('.kanban-display-tag');
+    tags.forEach(tag => {
+      const colIndex = parseInt(tag.dataset.colIndex);
+      const isStatusColumn = colIndex === kanbanStatusColumn;
+      
+      if (isStatusColumn) {
+        tag.classList.add('disabled');
+        tag.classList.remove('selected');
+      } else {
+        tag.classList.remove('disabled');
+      }
     });
+    
+    // 更新选中状态
+    updateKanbanDisplayTags();
   }
   
   if (!isNaN(kanbanStatusColumn) && kanbanStatusColumn >= 0) {
