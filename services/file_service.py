@@ -109,6 +109,10 @@ def delete_file(rel: str) -> tuple:
     from services.type_service import delete_types
     delete_types(filepath)
     
+    # 删除附件
+    from services.attachment_service import delete_file_attachments
+    delete_file_attachments(filepath)
+    
     return True, {'tree': build_tree()}
 
 

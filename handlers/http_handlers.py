@@ -12,6 +12,10 @@ from services.file_service import create_file, rename_file, move_file, delete_fi
 from services.snapshot_service import list_snapshots, restore_snapshot
 from services.meta_service import get_file_meta
 from services.style_service import load_styles
+from services.attachment_service import (
+    save_attachment, get_attachment_info, get_attachment_path,
+    delete_attachment, delete_file_attachments, get_attachment_preview_url
+)
 from utils import safe_join
 from config import DATA_DIR
 from models.session import file_sessions
@@ -191,6 +195,150 @@ def register_http_handlers(app):
             }, room=rel)
         
         return jsonify({'ok': True})
+    
+    # ========== 附件管理 ==========
+    @app.route('/api/attachment/upload', methods=['POST'])
+    def api_attachment_upload():
+        """上传附件到单元格"""
+        try:
+            file_rel = request.form.get('file', '')
+            sheet = request.form.get('sheet', 'Sheet1')
+            row = int(request.form.get('row', 0))
+            col = int(request.form.get('col', 0))
+            
+            filepath = safe_join(DATA_DIR, file_rel)
+            if filepath is None:
+                return jsonify({'error': '无效的文件路径'}), 400
+            
+            if 'file' not in request.files:
+                return jsonify({'error': '没有文件'}), 400
+            
+            uploaded_file = request.files['file']
+            if uploaded_file.filename == '':
+                return jsonify({'error': '文件名为空'}), 400
+            
+            # 读取文件数据
+            file_data = uploaded_file.read()
+            if len(file_data) > 50 * 1024 * 1024:  # 50MB 限制
+                return jsonify({'error': '文件大小超过 50MB 限制'}), 400
+            
+            # 保存附件
+            success, attachment_id, error = save_attachment(
+                filepath, sheet, row, col, 
+                uploaded_file.filename, file_data
+            )
+            
+            if not success:
+                return jsonify({'error': error or '保存失败'}), 500
+            
+            return jsonify({
+                'ok': True,
+                'attachment_id': attachment_id,
+                'filename': uploaded_file.filename,
+                'size': len(file_data)
+            })
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/attachment/list', methods=['GET'])
+    def api_attachment_list():
+        """获取单元格的附件列表"""
+        try:
+            file_rel = request.args.get('file', '')
+            sheet = request.args.get('sheet', 'Sheet1')
+            row = int(request.args.get('row', 0))
+            col = int(request.args.get('col', 0))
+            
+            filepath = safe_join(DATA_DIR, file_rel)
+            if filepath is None:
+                return jsonify({'error': '无效的文件路径'}), 400
+            
+            attachments = get_attachment_info(filepath, sheet, row, col)
+            
+            # 添加下载 URL
+            for att in attachments:
+                att['url'] = get_attachment_preview_url(
+                    filepath, sheet, row, col, att['id']
+                )
+            
+            return jsonify({
+                'ok': True,
+                'attachments': attachments
+            })
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/attachment/download', methods=['GET'])
+    def api_attachment_download():
+        """下载附件"""
+        try:
+            file_rel = request.args.get('file', '')
+            sheet = request.args.get('sheet', 'Sheet1')
+            row = int(request.args.get('row', 0))
+            col = int(request.args.get('col', 0))
+            attachment_id = request.args.get('id', '')
+            
+            filepath = safe_join(DATA_DIR, file_rel)
+            if filepath is None:
+                return jsonify({'error': '无效的文件路径'}), 400
+            
+            file_path = get_attachment_path(filepath, sheet, row, col, attachment_id)
+            
+            if not file_path or not os.path.exists(file_path):
+                return jsonify({'error': '附件不存在'}), 404
+            
+            # 从文件名中提取原始文件名
+            filename = os.path.basename(file_path)
+            parts = filename.split('_', 1)
+            if len(parts) == 2:
+                original_name = parts[1]
+            else:
+                original_name = filename
+            
+            return send_file(
+                file_path,
+                as_attachment=True,
+                download_name=original_name
+            )
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/attachment/delete', methods=['POST'])
+    def api_attachment_delete():
+        """删除附件"""
+        try:
+            d = request.get_json() or {}
+            file_rel = d.get('file', '')
+            sheet = d.get('sheet', 'Sheet1')
+            row = int(d.get('row', 0))
+            col = int(d.get('col', 0))
+            attachment_id = d.get('attachment_id', '')
+            
+            filepath = safe_join(DATA_DIR, file_rel)
+            if filepath is None:
+                return jsonify({'error': '无效的文件路径'}), 400
+            
+            success, error = delete_attachment(
+                filepath, sheet, row, col, attachment_id
+            )
+            
+            if not success:
+                return jsonify({'error': error or '删除失败'}), 500
+            
+            return jsonify({'ok': True})
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/attachment/stats', methods=['GET'])
+    def api_attachment_stats():
+        """获取附件存储统计"""
+        from services.attachment_service import get_storage_size
+        stats = get_storage_size()
+        return jsonify({'ok': True, 'stats': stats})
 
 
 

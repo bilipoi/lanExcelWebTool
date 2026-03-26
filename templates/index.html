@@ -130,6 +130,10 @@
   <button class="btn" id="btn-download" onclick="downloadFile()" disabled>下载</button>
   <button class="btn" id="btn-versions" onclick="showVersions()" disabled>版本历史</button>
   <button class="btn gray" id="btn-leave" onclick="leaveCurrentFile()" disabled>离开文件</button>
+  <select class="btn" id="view-mode-select" onchange="switchViewMode(this.value)" style="background:#2d6a9f;padding:4px 8px;font-size:12px;" disabled>
+    <option value="table">📋 表格视图</option>
+    <option value="kanban">📊 看板视图</option>
+  </select>
   <input type="file" id="upload-input" accept=".xlsx" style="display:none" onchange="handleUpload(event)">
 </div>
 
@@ -218,6 +222,7 @@
       <option value="progress">📊 进度条</option>
       <option value="dropdown">📋 下拉列表</option>
       <option value="rich-text">📝 富文本</option>
+      <option value="attachment">📎 附件</option>
     </select>
   </div>
   <div class="style-group">
@@ -426,6 +431,50 @@
     <div class="modal-btns">
       <button class="btn gray" onclick="closeRichTextEditor()">取消</button>
       <button class="btn green" onclick="saveRichTextContent()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 附件上传模态框 -->
+<div class="modal-overlay" id="attachment-modal">
+  <div class="modal" style="width:500px;">
+    <h2>上传附件</h2>
+    <p style="font-size:12px;color:#666;margin-bottom:10px;">选择要上传到单元格的文件（支持多选）</p>
+    
+    <div style="margin-bottom:15px;">
+      <input type="file" id="attachment-file-input" multiple style="display:none;" onchange="handleAttachmentFileSelect(event)">
+      <button class="btn" onclick="document.getElementById('attachment-file-input').click()" style="width:100%;padding:10px;">
+        📁 选择文件
+      </button>
+    </div>
+    
+    <div id="attachment-file-list" style="max-height:200px;overflow-y:auto;margin-bottom:15px;">
+      <!-- 文件列表将在这里显示 -->
+    </div>
+    
+    <p style="font-size:11px;color:#999;margin-bottom:15px;">
+      提示：单个文件最大 50MB，支持所有文件类型
+    </p>
+    
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeAttachmentConfigModal()">取消</button>
+      <button class="btn green" onclick="uploadAttachments()">上传</button>
+    </div>
+  </div>
+</div>
+
+<!-- 附件查看模态框 -->
+<div class="modal-overlay" id="attachment-viewer-modal" style="z-index:2000;">
+  <div class="modal" style="width:500px;max-height:80vh;display:flex;flex-direction:column;">
+    <h2>附件管理</h2>
+    <p style="font-size:12px;color:#666;margin-bottom:10px;">查看、下载或删除单元格附件</p>
+    
+    <div id="attachment-viewer-list" style="flex:1;overflow-y:auto;max-height:400px;margin-bottom:15px;">
+      <!-- 附件列表将在这里显示 -->
+    </div>
+    
+    <div class="modal-btns">
+      <button class="btn gray" onclick="closeAttachmentViewer()">关闭</button>
     </div>
   </div>
 </div>
@@ -1331,7 +1380,7 @@ function styledCellRenderer(instance, td, row, col, prop, value, cellProperties)
 }
 
 // ==================== 单元格类型功能 ====================
-// 支持的单元格类型: 'text', 'date', 'progress', 'dropdown', 'rich-text'
+// 支持的单元格类型: 'text', 'date', 'progress', 'dropdown', 'rich-text', 'attachment'
 
 function getCellType(row, col) {
   // 返回指定单元格的类型配置
@@ -1498,6 +1547,15 @@ function handleCellTypeChange(type) {
     }
     richTextConfigCells = selection;
     openRichTextConfigModal();
+  } else if (type === 'attachment') {
+    const selection = getSelectedCells();
+    if (selection.length === 0) {
+      setSaveStatus('请先选择单元格', '#e67e22');
+      document.getElementById('cell-type-select').value = '';
+      return;
+    }
+    attachmentConfigCells = selection;
+    openAttachmentConfigModal();
   }
 }
 
@@ -1683,6 +1741,213 @@ function blobToBase64(blob) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+// ==================== 附件管理功能 ====================
+var attachmentConfigCells = null;
+var attachmentCurrentCell = null;
+var attachmentList = [];
+
+// 打开附件配置模态框
+function openAttachmentConfigModal() {
+  const modal = document.getElementById('attachment-modal');
+  modal.classList.add('show');
+  
+  // 清空文件列表
+  document.getElementById('attachment-file-list').innerHTML = '';
+  attachmentList = [];
+  
+  // 重置文件输入
+  document.getElementById('attachment-file-input').value = '';
+}
+
+function closeAttachmentConfigModal() {
+  document.getElementById('attachment-modal').classList.remove('show');
+  attachmentConfigCells = null;
+  attachmentList = [];
+  document.getElementById('cell-type-select').value = '';
+}
+
+// 处理文件选择
+function handleAttachmentFileSelect(event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+  
+  for (let file of files) {
+    // 检查文件大小 (50MB 限制)
+    if (file.size > 50 * 1024 * 1024) {
+      setSaveStatus(`文件 ${file.name} 超过 50MB 限制`, '#e67e22');
+      continue;
+    }
+    
+    attachmentList.push(file);
+    
+    // 添加到显示列表
+    const listItem = document.createElement('div');
+    listItem.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px;border:1px solid #eee;border-radius:4px;margin-bottom:5px;';
+    listItem.innerHTML = `
+      <span style="font-size:13px;">📎 ${file.name} (${(file.size / 1024).toFixed(1)} KB)</span>
+      <button class="btn red" style="padding:2px 8px;font-size:11px;" onclick="this.parentElement.remove(); attachmentList = attachmentList.filter(f => f.name !== '${file.name}');">删除</button>
+    `;
+    document.getElementById('attachment-file-list').appendChild(listItem);
+  }
+  
+  // 清空输入，允许重复选择
+  event.target.value = '';
+}
+
+// 上传附件
+async function uploadAttachments() {
+  if (!attachmentConfigCells || attachmentConfigCells.length === 0) {
+    closeAttachmentConfigModal();
+    return;
+  }
+  
+  if (attachmentList.length === 0) {
+    setSaveStatus('请至少选择一个文件', '#e67e22');
+    return;
+  }
+  
+  // 先设置单元格类型
+  setCellTypesForSelection('attachment');
+  
+  // 为每个选中的单元格上传附件
+  for (let cell of attachmentConfigCells) {
+    for (let file of attachmentList) {
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('file_rel', currentFilePath);
+        formData.append('sheet', currentSheet);
+        formData.append('row', cell.row);
+        formData.append('col', cell.col);
+        
+        const response = await fetch('/api/attachment/upload', {
+          method: 'POST',
+          body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (!result.ok) {
+          setSaveStatus(`上传失败: ${result.error}`, '#e74c3c');
+        }
+      } catch (err) {
+        console.error('上传附件失败:', err);
+        setSaveStatus('上传附件失败', '#e74c3c');
+      }
+    }
+  }
+  
+  // 刷新表格显示
+  if (hot) hot.render();
+  
+  closeAttachmentConfigModal();
+  setSaveStatus(`已为 ${attachmentConfigCells.length} 个单元格上传 ${attachmentList.length} 个附件`);
+}
+
+// 打开附件查看模态框
+async function openAttachmentViewer(row, col) {
+  if (currentReadonly) {
+    setSaveStatus('文件为只读，无法管理附件', '#e67e22');
+    return;
+  }
+  
+  attachmentCurrentCell = { row, col };
+  const modal = document.getElementById('attachment-viewer-modal');
+  modal.classList.add('show');
+  
+  // 加载附件列表
+  await loadAttachmentList(row, col);
+}
+
+// 加载附件列表
+async function loadAttachmentList(row, col) {
+  const listContainer = document.getElementById('attachment-viewer-list');
+  listContainer.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">加载中...</div>';
+  
+  try {
+    const response = await fetch(`/api/attachment/list?file=${encodeURIComponent(currentFilePath)}&sheet=${currentSheet}&row=${row}&col=${col}`);
+    const result = await response.json();
+    
+    if (!result.ok) {
+      listContainer.innerHTML = `<div style="text-align:center;padding:20px;color:#e74c3c;">加载失败: ${result.error}</div>`;
+      return;
+    }
+    
+    if (result.attachments.length === 0) {
+      listContainer.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">暂无附件</div>';
+      return;
+    }
+    
+    listContainer.innerHTML = '';
+    result.attachments.forEach(att => {
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid #eee;border-radius:4px;margin-bottom:8px;';
+      
+      const sizeStr = att.size < 1024 ? `${att.size} B` : 
+                     att.size < 1024 * 1024 ? `${(att.size / 1024).toFixed(1)} KB` : 
+                     `${(att.size / (1024 * 1024)).toFixed(1)} MB`;
+      
+      item.innerHTML = `
+        <div style="flex:1;">
+          <div style="font-size:14px;font-weight:500;">📎 ${att.filename}</div>
+          <div style="font-size:11px;color:#999;">${sizeStr} · ${att.mtime}</div>
+        </div>
+        <div style="display:flex;gap:5px;">
+          <a href="${att.url}" download class="btn" style="padding:4px 10px;font-size:12px;text-decoration:none;">下载</a>
+          <button class="btn red" style="padding:4px 10px;font-size:12px;" onclick="deleteAttachment('${att.id}')">删除</button>
+        </div>
+      `;
+      
+      listContainer.appendChild(item);
+    });
+    
+  } catch (err) {
+    console.error('加载附件列表失败:', err);
+    listContainer.innerHTML = '<div style="text-align:center;padding:20px;color:#e74c3c;">加载失败</div>';
+  }
+}
+
+function closeAttachmentViewer() {
+  document.getElementById('attachment-viewer-modal').classList.remove('show');
+  attachmentCurrentCell = null;
+}
+
+// 删除附件
+async function deleteAttachment(attachmentId) {
+  if (!attachmentCurrentCell) return;
+  
+  if (!confirm('确定要删除这个附件吗？')) return;
+  
+  try {
+    const response = await fetch('/api/attachment/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file: currentFilePath,
+        sheet: currentSheet,
+        row: attachmentCurrentCell.row,
+        col: attachmentCurrentCell.col,
+        attachment_id: attachmentId
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.ok) {
+      // 刷新列表
+      await loadAttachmentList(attachmentCurrentCell.row, attachmentCurrentCell.col);
+      // 刷新表格
+      if (hot) hot.render();
+      setSaveStatus('附件已删除');
+    } else {
+      setSaveStatus(`删除失败: ${result.error}`, '#e74c3c');
+    }
+  } catch (err) {
+    console.error('删除附件失败:', err);
+    setSaveStatus('删除附件失败', '#e74c3c');
+  }
 }
 
 // 下拉列表配置模态框
@@ -1925,6 +2190,12 @@ function createCellsCallback() {
         cellProperties.readOnly = true;
         break;
 
+      case 'attachment':
+        // 附件类型使用自定义编辑器，禁用默认编辑
+        cellProperties.editor = false;
+        cellProperties.readOnly = true;
+        break;
+
       default:
         // 默认文本编辑器
         cellProperties.editor = 'text';
@@ -1989,6 +2260,20 @@ function customCellRenderer(instance, td, row, col, prop, value, cellProperties)
         openRichTextEditor(row, col, value || '');
       };
       td.appendChild(btn);
+      break;
+
+    case 'attachment':
+      // 附件渲染器 - 显示为按钮
+      td.innerHTML = '';
+      const attBtn = document.createElement('button');
+      attBtn.textContent = '📎 附件';
+      attBtn.style.cssText = 'width:100%;padding:4px 8px;background:#ff9800;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;';
+      attBtn.onclick = function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openAttachmentViewer(row, col);
+      };
+      td.appendChild(attBtn);
       break;
 
     default:
