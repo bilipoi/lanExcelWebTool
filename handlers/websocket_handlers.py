@@ -77,10 +77,22 @@ def register_websocket_handlers(socketio):
         join_room(rel)
         
         # 发送文件数据给该用户（包含其他用户的选中状态）
+        # 性能优化：只发送第一个 Sheet 的完整数据，其他 Sheet 发送空结构
+        sheets_data = {}
+        sheet_names = list(sess.spreadsheet_data.keys())
+        for idx, sheet_name in enumerate(sheet_names):
+            if idx == 0:
+                # 第一个 Sheet 发送完整数据
+                sheets_data[sheet_name] = sess.spreadsheet_data[sheet_name]
+            else:
+                # 其他 Sheet 只发送空占位，前端需要时再加载
+                sheets_data[sheet_name] = []  # 空数组表示需要懒加载
+        
         emit('file_opened', {
             'path': rel,
             'filename': os.path.basename(filepath),
-            'sheets': sess.spreadsheet_data,
+            'sheets': sheets_data,
+            'sheet_names': sheet_names,  # 所有 Sheet 名称列表
             'cell_styles': sess.cell_styles,
             'cell_types': sess.cell_types,
             'readonly': sess.readonly,
@@ -414,5 +426,37 @@ def register_websocket_handlers(socketio):
             'type_config': type_config,
             'username': username
         }, room=rel, broadcast=True, include_self=False)
+    
+    @socketio.on('load_sheet')
+    def handle_load_sheet(data):
+        """懒加载指定 Sheet 的数据"""
+        sid = request.sid
+        
+        if sid not in user_current_file:
+            return
+        
+        rel = user_current_file[sid]
+        if rel not in file_sessions:
+            return
+        
+        sess = file_sessions[rel]
+        sheet_name = data.get('sheet', 'Sheet1')
+        
+        # 检查 Sheet 是否存在
+        if sheet_name not in sess.spreadsheet_data:
+            emit('sheet_loaded', {
+                'sheet': sheet_name,
+                'data': [],
+                'error': 'Sheet 不存在'
+            })
+            return
+        
+        # 发送 Sheet 数据
+        emit('sheet_loaded', {
+            'sheet': sheet_name,
+            'data': sess.spreadsheet_data[sheet_name]
+        })
+        
+        print(f'[懒加载] {rel} - {sheet_name}')
 
 

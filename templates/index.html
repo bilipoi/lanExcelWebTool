@@ -2079,8 +2079,38 @@ socket.on('connect', () => {
 });
 
 socket.on('file_opened', data => {
+  // 处理懒加载：如果 sheets 是空的但 sheet_names 存在，说明是懒加载模式
+  if (data.sheet_names && data.sheet_names.length > 0) {
+    // 确保所有 sheet 都有至少空数组，避免 undefined
+    data.sheet_names.forEach(sheetName => {
+      if (!data.sheets[sheetName]) {
+        data.sheets[sheetName] = []; // 标记为需要懒加载
+      }
+    });
+  }
   // 使用多页签系统打开文件
   openFileTab(data.path, data);
+});
+
+socket.on('sheet_loaded', data => {
+  // 接收懒加载的 Sheet 数据
+  const { sheet, data: sheetData, error } = data;
+  if (error) {
+    setSaveStatus('加载 Sheet 失败: ' + error, '#e74c3c');
+    return;
+  }
+  
+  // 更新 sheetsData
+  if (sheetsData[sheet] !== undefined) {
+    sheetsData[sheet] = sheetData;
+    
+    // 如果是当前显示的 Sheet，刷新表格
+    if (sheet === currentSheet && hot) {
+      initTable(sheetsData[sheet]);
+    }
+    
+    setSaveStatus(`Sheet "${sheet}" 加载完成`);
+  }
 });
 
 socket.on('cell_selected', data => {
@@ -2907,13 +2937,34 @@ function renderTabs() {
     tab.onclick = () => {
       currentSheet = name;
       renderTabs();
-      initTable(sheetsData[name]);
-      socket.emit('cell_deselect');
       
-      // 如果在看板视图，重新初始化
-      const viewSelect = document.getElementById('view-mode-select');
-      if (viewSelect.value === 'kanban') {
-        initKanbanView();
+      // 检查是否需要懒加载
+      const sheetData = sheetsData[name];
+      if (!sheetData || (Array.isArray(sheetData) && sheetData.length === 0)) {
+        // 显示加载指示器
+        const container = document.getElementById('hot-container');
+        if (container) {
+          container.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100%;color:#666;font-size:14px;">正在加载...</div>';
+        }
+        
+        // 发送懒加载请求
+        socket.emit('load_sheet', { sheet: name });
+        
+        // 如果在看板视图，暂时显示加载状态
+        const viewSelect = document.getElementById('view-mode-select');
+        if (viewSelect.value === 'kanban') {
+          document.getElementById('kanban-board').innerHTML = '<div class="kanban-empty-state">正在加载...</div>';
+        }
+      } else {
+        // 数据已存在，直接显示
+        initTable(sheetsData[name]);
+        socket.emit('cell_deselect');
+        
+        // 如果在看板视图，重新初始化
+        const viewSelect = document.getElementById('view-mode-select');
+        if (viewSelect.value === 'kanban') {
+          initKanbanView();
+        }
       }
     };
     el.appendChild(tab);
